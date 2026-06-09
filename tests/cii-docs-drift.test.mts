@@ -42,6 +42,38 @@ function markdownSection(text: string, heading: string): string {
     : text.slice(sectionStart, sectionStart + nextHeading);
 }
 
+function titleCase(value: string): string {
+  return value.slice(0, 1).toUpperCase() + value.slice(1);
+}
+
+function parseStrategicRiskDisplayBands(source: string): Array<{ min: number; label: string }> {
+  const match = source.match(/const STRATEGIC_RISK_BANDS:[\s\S]*?=\s*\[([\s\S]*?)\]\s*as const;/);
+  assert.ok(match, 'StrategicRiskPanel STRATEGIC_RISK_BANDS declaration not found');
+  return [...match[1]!.matchAll(/\{\s*min:\s*(\d+),\s*levelKey:\s*'([^']+)'/g)]
+    .map(([, min, label]) => ({ min: Number(min), label: titleCase(label!) }));
+}
+
+function displayBandRows(bands: Array<{ min: number; label: string }>): Array<{ range: string; label: string }> {
+  return bands.map((band, index) => {
+    const upper = index === 0 ? 100 : bands[index - 1]!.min - 1;
+    return { range: `${band.min}-${upper}`, label: band.label };
+  });
+}
+
+function parseStrategicRiskServerBands(source: string): Array<{ range: string; enumValue: string }> {
+  const high = source.match(/overallScore\s*>=\s*(\d+)\s*\n\s*\?\s*'SEVERITY_LEVEL_HIGH'/);
+  const medium = source.match(/overallScore\s*>=\s*(\d+)\s*\n\s*\?\s*'SEVERITY_LEVEL_MEDIUM'/);
+  assert.ok(high, 'server StrategicRisk HIGH threshold not found');
+  assert.ok(medium, 'server StrategicRisk MEDIUM threshold not found');
+  const highMin = Number(high[1]);
+  const mediumMin = Number(medium[1]);
+  return [
+    { range: `${highMin}-100`, enumValue: 'SEVERITY_LEVEL_HIGH' },
+    { range: `${mediumMin}-${highMin - 1}`, enumValue: 'SEVERITY_LEVEL_MEDIUM' },
+    { range: `0-${mediumMin - 1}`, enumValue: 'SEVERITY_LEVEL_LOW' },
+  ];
+}
+
 describe('CII docs drift guards', () => {
   it('internal review docs do not retain stale CII country-count or source-of-truth claims', () => {
     const internalDocPaths = [
@@ -105,6 +137,8 @@ describe('CII docs drift guards', () => {
 
   it('strategic risk doc publishes current server severity bands and roll-up', () => {
     const doc = readFileSync(resolve(root, 'docs', 'strategic-risk.mdx'), 'utf8');
+    const panelSource = readFileSync(resolve(root, 'src/components/StrategicRiskPanel.ts'), 'utf8');
+    const serverSource = readFileSync(resolve(root, 'server/worldmonitor/intelligence/v1/get-risk-scores.ts'), 'utf8');
     const scoreSection = markdownSection(doc, '### Server Score and Browser Fallback (0-100)');
     const riskLevels = markdownSection(doc, '### Risk Levels');
     const trendSection = markdownSection(doc, '### Trend Detection');
@@ -122,9 +156,22 @@ describe('CII docs drift guards', () => {
       /local\s+fallback/i,
       'strategic-risk doc must label the additive overview as browser/local fallback',
     );
-    assert.match(riskLevels, /\|\s*70-100\s*\|\s*\*\*High\*\*/);
-    assert.match(riskLevels, /\|\s*40-69\s*\|\s*\*\*Medium\*\*/);
-    assert.match(riskLevels, /\|\s*0-39\s*\|\s*\*\*Low\*\*/);
+    assert.match(riskLevels, /panel-visible headline label/i);
+    assert.match(riskLevels, /server `StrategicRisk\.level` enum/i);
+    for (const { range, label } of displayBandRows(parseStrategicRiskDisplayBands(panelSource))) {
+      assert.match(
+        riskLevels,
+        new RegExp(`\\|\\s*${range}\\s*\\|\\s*\\*\\*${label}\\*\\*\\s*\\|`),
+        `strategic-risk doc must publish panel display band ${range} ${label}`,
+      );
+    }
+    for (const { range, enumValue } of parseStrategicRiskServerBands(serverSource)) {
+      assert.match(
+        riskLevels,
+        new RegExp(`\\|\\s*${range}\\s*\\|\\s*\`${enumValue}\`\\s*\\|`),
+        `strategic-risk doc must publish server API band ${range} ${enumValue}`,
+      );
+    }
     assert.doesNotMatch(
       riskLevels,
       /Trend Icon|Escalating|De-escalating/,
@@ -183,8 +230,8 @@ describe('CII docs drift guards', () => {
     );
     assert.doesNotMatch(
       riskLevels,
-      /\*\*(?:Critical|Elevated|Moderate)\*\*|50-69|30-49/,
-      'strategic-risk risk-level table must not retain old Critical/Elevated/Moderate 70/50/30 semantics',
+      /\*\*Moderate\*\*|50-69|30-49/,
+      'strategic-risk risk-level table must not retain old Moderate 70/50/30 semantics',
     );
   });
 
@@ -316,6 +363,66 @@ describe('CII docs drift guards', () => {
       section,
       /Critical\/Elevated\/Moderate|70\/50\/30/,
       'algorithms Strategic Risk section must not reintroduce old four-band risk semantics',
+    );
+  });
+
+  it('public and developer surfaces do not retain stale CII, CRI, or platform-count claims', () => {
+    const surfaces = [
+      { label: 'public/llms.txt', text: readFileSync(resolve(root, 'public', 'llms.txt'), 'utf8') },
+      { label: 'public/llms-full.txt', text: readFileSync(resolve(root, 'public', 'llms-full.txt'), 'utf8') },
+      { label: 'docs/PRESS_KIT.md', text: readFileSync(resolve(root, 'docs', 'PRESS_KIT.md'), 'utf8') },
+      { label: 'docs/COMMUNITY-PROMOTION-GUIDE.md', text: readFileSync(resolve(root, 'docs', 'COMMUNITY-PROMOTION-GUIDE.md'), 'utf8') },
+      { label: 'AGENTS.md', text: readFileSync(resolve(root, 'AGENTS.md'), 'utf8') },
+    ];
+
+    for (const surface of surfaces) {
+      assert.doesNotMatch(
+        surface.text,
+        /\bCountry Instability Index\b[\s\S]{0,240}\b22\s+(?:monitored\s+)?(?:nations|countries)\b/i,
+        `${surface.label} must not retain the old 22-country CII count`,
+      );
+      assert.doesNotMatch(
+        surface.text,
+        /Baseline risk\s*\(40%\)[\s\S]{0,220}(?:Social unrest|unrest events)\s*\(20%\)[\s\S]{0,220}(?:Security events|security activity)\s*\(20%\)[\s\S]{0,220}Information velocity\s*\(20%\)/i,
+        `${surface.label} must not publish the old 40/20/20/20 CII shortcut as current methodology`,
+      );
+      assert.doesNotMatch(
+        surface.text,
+        /\b(?:150|435)\+\s+(?:curated\s+)?(?:RSS\s+)?(?:news\s+)?feeds\b|\b(?:35|45|50)\+\s+(?:interactive\s+)?(?:map\s+)?(?:data\s+)?layers\b|\b(?:14|19|21)\s+languages\b/i,
+        `${surface.label} must not retain stale feed, layer, or language counts`,
+      );
+    }
+
+    const llmsBrief = surfaces[0]!.text;
+    const llmsFull = surfaces[1]!.text;
+    const pressKit = surfaces[2]!.text;
+    const communityGuide = surfaces[3]!.text;
+    const agentsGuide = surfaces[4]!.text;
+
+    assert.match(llmsBrief, /CII v8[\s\S]{0,80}31 Tier-1 countries/i);
+    assert.match(llmsBrief, /CRI[\s\S]{0,120}196-country public rankable universe/i);
+    assert.match(llmsBrief, /six specialized variants/i);
+    assert.match(llmsBrief, /56 map layer types/i);
+    assert.match(llmsBrief, /500\+ curated RSS feeds/i);
+    assert.match(llmsBrief, /24 languages/i);
+    assert.match(llmsFull, /Country Instability Index \(CII v8\)[\s\S]{0,240}31 Tier-1 countries/i);
+    assert.match(llmsFull, /eventScore = unrest \* 0\.25 \+ conflict \* 0\.30 \+ security \* 0\.20 \+ information \* 0\.25/i);
+    assert.match(llmsFull, /Country Resilience Index \(CRI\)[\s\S]{0,160}196-country public rankable universe/i);
+    assert.match(llmsFull, /six specialized variants/i);
+    assert.match(llmsFull, /56 map layer types/i);
+    assert.match(llmsFull, /500\+ RSS feeds/i);
+    assert.match(llmsFull, /24 languages/i);
+    assert.match(pressKit, /server-authoritative CII v8[\s\S]{0,120}31 Tier-1 countries/i);
+    assert.match(pressKit, /Country Resilience Index[\s\S]{0,140}196-country public rankable universe/i);
+    assert.match(pressKit, /six thematic variants/i);
+    assert.match(pressKit, /56 map layer types/i);
+    assert.match(pressKit, /500\+ RSS feeds/i);
+    assert.match(pressKit, /24 \(including RTL\)/i);
+    assert.match(communityGuide, /six specialized views/i);
+    assert.match(agentsGuide, /`energy`:\s+Energy security/i);
+    assert.doesNotMatch(
+      `${llmsFull}\n${communityGuide}\n${agentsGuide}`,
+      /Tri-Variant Build System|Three Variant Dashboards|three specialized variants|tri-variant architecture|three specialized views/i,
     );
   });
 });
