@@ -14,6 +14,8 @@ const zodCspSource = readFileSync(resolve(__dirname, '../src/bootstrap/zod-csp.t
 const proIndexCssSource = readFileSync(resolve(__dirname, '../pro-test/src/index.css'), 'utf-8');
 const middlewareSource = readFileSync(resolve(__dirname, '../middleware.ts'), 'utf-8');
 const dockerfileSource = readFileSync(resolve(__dirname, '../Dockerfile'), 'utf-8');
+const dockerNginxSource = readFileSync(resolve(__dirname, '../docker/nginx.conf'), 'utf-8');
+const frontendDockerfileSource = readFileSync(resolve(__dirname, '../docker/Dockerfile'), 'utf-8');
 const SPA_HTML_CACHE_SOURCE = '/((?!api|mcp|oauth|assets|blog|docs|embed|embed\\.html|favico|map-styles|data|textures|pro|sw\\.js|workbox-[a-f0-9]+\\.js|manifest\\.webmanifest|offline\\.html|robots\\.txt|sitemap\\.xml|llms\\.txt|llms-full\\.txt|openapi\\.yaml|\\.well-known|wm-widget-sandbox\\.html|mcp-grant\\.html|mcp-grant).*)';
 const GLOBAL_SECURITY_HEADER_SOURCE = '/((?!docs|embed|embed\\.html).*)';
 const APP_ROOT_HOST_PATTERN = '^(?:(?:www|tech|finance|commodity|happy|energy)\\.)?worldmonitor\\.app$';
@@ -510,8 +512,8 @@ const getHeaderValue = (key) => {
   return header?.value ?? null;
 };
 
-const getNginxHeaderValue = (key) => {
-  const nginxConf = readFileSync(resolve(__dirname, '../docker/nginx-security-headers.conf'), 'utf-8');
+const getNginxHeaderValueFrom = (file, key) => {
+  const nginxConf = readFileSync(resolve(__dirname, `../${file}`), 'utf-8');
   const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const line = nginxConf
     .split('\n')
@@ -519,6 +521,8 @@ const getNginxHeaderValue = (key) => {
   const match = line?.match(/^add_header\s+\S+\s+"(.*)"\s+always;$/i);
   return match?.[1].replace(/\\"/g, '"') ?? null;
 };
+
+const getNginxHeaderValue = (key) => getNginxHeaderValueFrom('docker/nginx-security-headers.conf', key);
 
 describe('security header guardrails', () => {
   it('includes required security headers on catch-all route', () => {
@@ -959,6 +963,32 @@ describe('embeddable map route guardrails', () => {
       assert.ok(!getCspDirectiveTokens(csp, 'script-src').includes("'unsafe-inline'"));
     });
   }
+
+  it('keeps Docker embed routes on the locked-down embed security headers', () => {
+    const nginxTemplate = readFileSync(resolve(__dirname, '../docker/nginx.conf.template'), 'utf-8');
+    assert.match(nginxTemplate, /location = \/embed \{[\s\S]*?include \/etc\/nginx\/embed_security_headers\.conf;/);
+    assert.match(nginxTemplate, /location = \/embed\.html \{[\s\S]*?include \/etc\/nginx\/embed_security_headers\.conf;/);
+    assert.match(frontendDockerfileSource, /COPY docker\/nginx-embed-security-headers\.conf \/etc\/nginx\/embed_security_headers\.conf/);
+    assert.match(dockerNginxSource, /location = \/embed \{[\s\S]*?add_header Permissions-Policy "camera=\(\), microphone=\(\), geolocation=\(\), accelerometer=\(\)/);
+    assert.match(dockerNginxSource, /location = \/embed\.html \{[\s\S]*?add_header Permissions-Policy "camera=\(\), microphone=\(\), geolocation=\(\), accelerometer=\(\)/);
+
+    const lockedPolicy = getHeaderValueForSource('/embed', 'Permissions-Policy');
+    const dockerLockedPolicy = getNginxHeaderValueFrom('docker/nginx-embed-security-headers.conf', 'Permissions-Policy');
+    assert.equal(dockerLockedPolicy, lockedPolicy, 'Docker embed Permissions-Policy must match Vercel embed policy');
+    for (const directive of [
+      'accelerometer=()',
+      'bluetooth=()',
+      'gyroscope=()',
+      'magnetometer=()',
+      'picture-in-picture=()',
+      'payment=()',
+    ]) {
+      assert.ok(dockerLockedPolicy.includes(directive), `Docker embed policy must keep ${directive}`);
+    }
+
+    const dockerEmbedCsp = getNginxHeaderValueFrom('docker/nginx-embed-security-headers.conf', 'Content-Security-Policy');
+    assert.equal(dockerEmbedCsp, getHeaderValueForSource('/embed', 'Content-Security-Policy'));
+  });
 });
 
 // Per-route CSP override for the hosted brief magazine. The renderer
