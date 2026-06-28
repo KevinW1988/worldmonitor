@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
 import handler from './bootstrap.js';
+import { issueSessionToken } from './_session.js';
 
 const ENTERPRISE_KEY = 'enterprise-bootstrap-test-key';
 const USER_KEY = 'wm_0123456789abcdef0123456789abcdef01234567';
@@ -22,6 +23,7 @@ async function withMockedBootstrapAuth({ entitlement, userKeyResponse = 'valid',
     'CONVEX_SERVER_SHARED_SECRET',
     'UPSTASH_REDIS_REST_URL',
     'UPSTASH_REDIS_REST_TOKEN',
+    'WM_SESSION_SECRET',
     'WORLDMONITOR_VALID_KEYS',
   ]);
   const originalFetch = globalThis.fetch;
@@ -31,6 +33,7 @@ async function withMockedBootstrapAuth({ entitlement, userKeyResponse = 'valid',
   process.env.CONVEX_SERVER_SHARED_SECRET = 'shared-secret';
   process.env.UPSTASH_REDIS_REST_URL = 'https://upstash.test';
   process.env.UPSTASH_REDIS_REST_TOKEN = 'redis-token';
+  process.env.WM_SESSION_SECRET = 'test-secret-for-bootstrap-auth-cache-matrix';
   process.env.WORLDMONITOR_VALID_KEYS = ENTERPRISE_KEY;
 
   globalThis.fetch = async (input, init) => {
@@ -218,6 +221,17 @@ test('weather-only bootstrap with wm_ user key validates user auth before return
 test('allowed-Origin valid wm_ user key returns bootstrap data without shared cache headers', async () => {
   await withMockedBootstrapAuth({ entitlement: activeApiEntitlement() }, async () => {
     const resp = await handler(makeBootstrapRequestWithAllowedOrigin({ 'X-WorldMonitor-Key': USER_KEY }));
+
+    assert.equal(resp.status, 200);
+    assert.deepEqual(Object.keys(await resp.json()).sort(), ['data', 'missing']);
+    assertNonSharedCacheHeaders(resp);
+  });
+});
+
+test('session-authenticated bootstrap returns data without shared cache headers', async () => {
+  await withMockedBootstrapAuth({ entitlement: activeApiEntitlement() }, async () => {
+    const { token } = await issueSessionToken();
+    const resp = await handler(makeBootstrapRequestWithAllowedOrigin({ Cookie: `wm-session=${token}` }));
 
     assert.equal(resp.status, 200);
     assert.deepEqual(Object.keys(await resp.json()).sort(), ['data', 'missing']);

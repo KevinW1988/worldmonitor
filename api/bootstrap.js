@@ -341,8 +341,7 @@ async function validateBootstrapAuth(req, cors) {
 }
 
 function successCacheHeaders(tier, authKind, cors) {
-  const isKeyAuth = authKind === 'enterprise' || authKind === 'user';
-  if (isKeyAuth) {
+  if (authKind !== 'public-weather') {
     return {
       ...cors,
       'Cache-Control': 'no-store',
@@ -388,11 +387,9 @@ export default async function handler(req) {
   try {
     cached = await getCachedJsonBatch(keys);
   } catch {
-    // Read auth.kind directly (not the output of successCacheHeaders) so a
-    // key-authenticated empty fallback always stays no-store and can never be
-    // shared-cached by a CDN to another caller.
-    const isKeyAuth = auth.kind === 'enterprise' || auth.kind === 'user';
-    const cacheControl = isKeyAuth ? 'no-store' : 'no-cache';
+    // Only the anonymous weather bootstrap may avoid no-store here; every
+    // other successful bootstrap response can carry session/key scoped data.
+    const cacheControl = auth.kind === 'public-weather' ? 'no-cache' : 'no-store';
     return jsonResponse({ data: {}, missing: names }, 200, { ...cors, 'Cache-Control': cacheControl });
   }
 
