@@ -129,13 +129,9 @@ import {
   resumePendingCheckout,
 } from '@/services/checkout';
 import { captureReferralFromUrl } from '@/services/referral-capture';
-import {
-  CorrelationEngine,
-  militaryAdapter,
-  escalationAdapter,
-  economicAdapter,
-  disasterAdapter,
-} from '@/services/correlation-engine';
+// CorrelationEngine + its 4 adapters are dynamic-imported at the post-loadAllData
+// run site (#4486) so the engine bytes stay off the eager boot graph. The TYPE is
+// referenced via the inline `import(...)` type in app-context.ts (erased at build).
 import type { CorrelationPanel } from '@/components/CorrelationPanel';
 
 const CYBER_LAYER_ENABLED = import.meta.env.VITE_ENABLE_CYBER_LAYER === 'true';
@@ -1081,6 +1077,35 @@ export class App {
     }
   }
 
+  private async loadInitialCorrelationEngine(): Promise<void> {
+    try {
+      const {
+        CorrelationEngine,
+        militaryAdapter,
+        escalationAdapter,
+        economicAdapter,
+        disasterAdapter,
+      } = await import('@/services/correlation-engine');
+
+      if (this.state.isDestroyed) return;
+      const engine = new CorrelationEngine();
+      engine.registerAdapter(militaryAdapter);
+      engine.registerAdapter(escalationAdapter);
+      engine.registerAdapter(economicAdapter);
+      engine.registerAdapter(disasterAdapter);
+      this.state.correlationEngine = engine;
+
+      await engine.run(this.state);
+      if (this.state.isDestroyed) return;
+      for (const domain of ['military', 'escalation', 'economic', 'disaster'] as const) {
+        const panel = this.state.panels[`${domain}-correlation`] as CorrelationPanel | undefined;
+        panel?.updateCards(engine.getCards(domain));
+      }
+    } catch (error) {
+      console.warn('[CorrelationEngine] Initial lazy load/run failed:', error);
+    }
+  }
+
   public async init(): Promise<void> {
     const initStart = performance.now();
 
@@ -1391,13 +1416,8 @@ export class App {
     this.eventHandlers.setupExportPanel();
     this.eventHandlers.setupSearchControls();
 
-    // Correlation engine
-    const correlationEngine = new CorrelationEngine();
-    correlationEngine.registerAdapter(militaryAdapter);
-    correlationEngine.registerAdapter(escalationAdapter);
-    correlationEngine.registerAdapter(economicAdapter);
-    correlationEngine.registerAdapter(disasterAdapter);
-    this.state.correlationEngine = correlationEngine;
+    // Correlation engine is constructed lazily at its post-loadAllData run site
+    // (Phase 6 below) so its bytes + adapters stay off the eager boot graph (#4486).
     this.eventHandlers.setupUnifiedSettings();
     this.eventHandlers.setupAuthWidget();
     // Capture any ?ref= / ?wm_referral= from the URL into localStorage
@@ -1482,15 +1502,11 @@ export class App {
     this.bootstrapHydrationState = getBootstrapHydrationState();
     this.updateConnectivityUi();
 
-    // Initial correlation engine run
-    if (this.state.correlationEngine) {
-      void this.state.correlationEngine.run(this.state).then(() => {
-        for (const domain of ['military', 'escalation', 'economic', 'disaster'] as const) {
-          const panel = this.state.panels[`${domain}-correlation`] as CorrelationPanel | undefined;
-          panel?.updateCards(this.state.correlationEngine!.getCards(domain));
-        }
-      });
-    }
+    // Initial correlation engine run — construct + register adapters + run here,
+    // inside a dynamic import, so the engine graph loads off the eager boot path
+    // (#4486). state.correlationEngine settles asynchronously; the refresh scheduler
+    // and export getter that read it already null-guard.
+    void this.loadInitialCorrelationEngine();
 
     startLearning();
 
