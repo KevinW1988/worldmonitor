@@ -284,11 +284,18 @@ export const RPC_TOOLS: ToolDef[] = [
         signal: AbortSignal.timeout(22_000),
       });
       if (!res.ok) {
+        // Surface the gateway's error code in the thrown message so Sentry
+        // groups the failure by root cause, not just status. Body reads are
+        // best-effort; a read failure must not mask the HTTP status.
         const detail = await res.text().catch(() => '');
         let code = '';
+        // `error` is usually a string (for example,
+        // `invalid_internal_mcp_signature`), but stringify non-string shapes so
+        // object envelopes remain readable. Bound both paths so Sentry titles
+        // cannot bloat on a long body.
         try {
-          const parsed = JSON.parse(detail) as { error?: unknown };
-          code = typeof parsed.error === 'string' ? parsed.error : '';
+          const error = (JSON.parse(detail) as { error?: unknown }).error ?? '';
+          code = (typeof error === 'string' ? error : JSON.stringify(error)).slice(0, 120);
         } catch {
           code = detail.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
         }
