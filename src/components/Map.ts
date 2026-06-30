@@ -115,6 +115,8 @@ interface WorldTopology extends Topology {
 }
 
 export class MapComponent {
+  private static readonly MOBILE_MIN_EARTHQUAKE_MAGNITUDE = 5;
+  private static readonly MOBILE_MAX_IRAN_EVENTS = 50;
   private static readonly LAYER_ZOOM_THRESHOLDS: Partial<
     Record<keyof MapLayers, { minZoom: number; showLabels?: number }>
   > = {
@@ -206,6 +208,7 @@ export class MapComponent {
   private destroyed = false;
   // Mobile loads the lighter 110m country topology (U6); passed in from MapContainer.
   private readonly isMobile: boolean;
+  private mobileLabelVisibilityArmed = true;
 
   constructor(container: HTMLElement, initialState: MapState, options: MapComponentOptions = {}) {
     this.container = container;
@@ -213,6 +216,7 @@ export class MapComponent {
     this.hotspots = [...INTEL_HOTSPOTS];
     const chrome = options.chrome ?? true;
     this.isMobile = options.isMobile ?? false;
+    this.mobileLabelVisibilityArmed = !this.isMobile;
 
     this.wrapper = document.createElement('div');
     this.wrapper.className = 'map-wrapper';
@@ -850,6 +854,12 @@ export class MapComponent {
       );
     };
 
+    // Resume mobile label-overlap measurement on the first direct map interaction.
+    this.container.addEventListener('pointerdown', (e) => {
+      if (shouldIgnoreInteractionStart(e.target)) return;
+      this.resumeMobileLabelVisibility();
+    });
+
     // Wheel zoom with smooth delta
     this.container.addEventListener(
       'wheel',
@@ -922,6 +932,7 @@ export class MapComponent {
 
     this.container.addEventListener('touchstart', (e) => {
       if (shouldIgnoreInteractionStart(e.target)) return;
+      this.resumeMobileLabelVisibility();
       cancelAnimationFrame(inertiaRaf);
       const touch1 = e.touches[0];
       const touch2 = e.touches[1];
@@ -1667,7 +1678,10 @@ export class MapComponent {
 
     // Iran events (severity-colored circles matching DeckGL layer)
     if (this.state.layers.iranAttacks && this.iranEvents.length > 0) {
-      this.iranEvents.forEach((ev) => {
+      const iranEventsForRender = this.isMobile
+        ? this.iranEvents.slice(0, MapComponent.MOBILE_MAX_IRAN_EVENTS)
+        : this.iranEvents;
+      iranEventsForRender.forEach((ev) => {
         const pos = projection([ev.longitude, ev.latitude]);
         if (!pos || !Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) return;
 
@@ -1770,9 +1784,12 @@ export class MapComponent {
       const filteredQuakes = this.state.timeRange === 'all'
         ? this.earthquakes
         : this.earthquakes.filter((eq) => eq.occurredAt >= Date.now() - this.getTimeRangeMs());
-      console.log('[Map] After time filter:', filteredQuakes.length, 'earthquakes. TimeRange:', this.state.timeRange);
+      const quakesForRender = this.isMobile
+        ? filteredQuakes.filter((eq) => eq.magnitude >= MapComponent.MOBILE_MIN_EARTHQUAKE_MAGNITUDE)
+        : filteredQuakes;
+      console.log('[Map] After time/mobile filter:', quakesForRender.length, 'earthquakes. TimeRange:', this.state.timeRange);
       let rendered = 0;
-      filteredQuakes.forEach((eq) => {
+      quakesForRender.forEach((eq) => {
         const pos = projection([eq.location?.longitude ?? 0, eq.location?.latitude ?? 0]);
         if (!pos) {
           console.log('[Map] Earthquake position null for:', eq.place, eq.location?.longitude, eq.location?.latitude);
@@ -3901,9 +3918,19 @@ export class MapComponent {
     this.wrapper.style.setProperty('--zoom', String(zoom));
 
     // Smart label hiding based on zoom level and overlap
-    this.updateLabelVisibility(zoom);
+    if (this.shouldUpdateLabelVisibility()) this.updateLabelVisibility(zoom);
     this.updateZoomLayerVisibility();
     this.emitStateChange();
+  }
+
+  private shouldUpdateLabelVisibility(): boolean {
+    return !this.isMobile || this.mobileLabelVisibilityArmed;
+  }
+
+  private resumeMobileLabelVisibility(): void {
+    if (!this.isMobile || this.mobileLabelVisibilityArmed) return;
+    this.mobileLabelVisibilityArmed = true;
+    this.updateLabelVisibility(this.state.zoom);
   }
 
   private updateZoomLayerVisibility(): void {
