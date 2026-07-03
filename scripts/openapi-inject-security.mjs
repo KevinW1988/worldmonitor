@@ -107,6 +107,17 @@ const PUBLIC_FORBIDDEN_GATES = new Map([
   }],
 ]);
 
+// A path cannot be both PRO-entitlement-gated (ForbiddenError 403) and
+// public-bot-gated (Error 403): the two passes emit different 403 bodies for
+// the same operation, so they would overwrite each other on every run and the
+// artifact could never converge (the pre-push freshness gate would fail
+// forever). Fail closed if the two maps ever overlap.
+for (const path of PUBLIC_FORBIDDEN_GATES.keys()) {
+  if (ENDPOINT_ENTITLEMENTS.has(path)) {
+    throw new Error(`${path} is in both ENDPOINT_ENTITLEMENTS and PUBLIC_FORBIDDEN_GATES — the 403 contract would oscillate; a path cannot be both PRO-entitlement-gated and public-bot-gated`);
+  }
+}
+
 // ── Contract definitions ──────────────────────────────────────────────────
 // Header names mirror the gateway's accepted public API-key headers
 // (server/gateway.ts: X-WorldMonitor-Key / X-Api-Key) and docs/api-platform.mdx.
@@ -515,24 +526,14 @@ function findYamlPathRange(lines, path) {
   return { start, end };
 }
 
-function findYamlOperationRange(lines, path) {
-  const range = findYamlPathRange(lines, path);
-  if (!range) return null;
-  const methodIndex = lines.findIndex((line, index) => (
-    index > range.start && index < range.end && YAML_METHOD_LINE_RE.test(line)
-  ));
-  if (methodIndex === -1) return null;
-  return { start: methodIndex, end: range.end };
-}
-
 function yamlBlockNote(existingText, requiredTier) {
   return /PRO-gated/i.test(existingText)
     ? `Requires entitlement tier >= ${requiredTier}.`
     : entitlementNote(requiredTier);
 }
 
-function ensureYamlEntitlementDescription(lines, path, requiredTier) {
-  const op = findYamlOperationRange(lines, path);
+function ensureYamlEntitlementDescription(lines, path, method, requiredTier) {
+  const op = findYamlOperationRangeForMethod(lines, path, method);
   if (!op) return false;
   const descIndex = lines.findIndex((line, index) => (
     index > op.start && index < op.end && line.startsWith('            description:')
@@ -570,8 +571,8 @@ function ensureYamlEntitlementDescription(lines, path, requiredTier) {
   return true;
 }
 
-function ensureYamlGateDescription(lines, path, note) {
-  const op = findYamlOperationRange(lines, path);
+function ensureYamlGateDescription(lines, path, method, note) {
+  const op = findYamlOperationRangeForMethod(lines, path, method);
   if (!op) return false;
   const descIndex = lines.findIndex((line, index) => (
     index > op.start && index < op.end && line.startsWith('            description:')
@@ -625,8 +626,8 @@ function findYamlResponseRange(lines, op, statusLine) {
   return { start, end, text: lines.slice(start, end).join('\n') };
 }
 
-function ensureYamlForbiddenResponse(lines, path, responseLines = YAML_FORBIDDEN_RESPONSE) {
-  const op = findYamlOperationRange(lines, path);
+function ensureYamlForbiddenResponse(lines, path, method, responseLines = YAML_FORBIDDEN_RESPONSE) {
+  const op = findYamlOperationRangeForMethod(lines, path, method);
   if (!op) return false;
 
   const expected = responseLines.join('\n');
@@ -702,11 +703,26 @@ function injectYamlEntitlementContract(text) {
   let changed = false;
   let matchedEntitlementPath = false;
 
+  // Look up the concrete HTTP methods of each path once. Entitlement 403s and
+  // gate notes are stamped per method (a path may carry more than one, e.g.
+  // /api/v2/shipping/webhooks), matching injectJson which iterates every op.
+  const methodsByPath = new Map(
+    enumerateYamlOperations(lines).map(({ path, methods }) => [path, methods]),
+  );
+
   for (const [path, requiredTier] of ENDPOINT_ENTITLEMENTS) {
-    if (!findYamlPathRange(lines, path)) continue;
+    // Public paths opt out of auth entirely and carry no entitlement 403 —
+    // injectJson handles them in its isPublic branch, never the entitlement
+    // branch, so mirror that here (a public+entitlement overlap would otherwise
+    // diverge from the JSON sibling).
+    if (PUBLIC_PATHS.has(path)) continue;
+    const methods = methodsByPath.get(path);
+    if (!methods) continue;
     matchedEntitlementPath = true;
-    changed = ensureYamlEntitlementDescription(lines, path, requiredTier) || changed;
-    changed = ensureYamlForbiddenResponse(lines, path) || changed;
+    for (const method of methods) {
+      changed = ensureYamlEntitlementDescription(lines, path, method, requiredTier) || changed;
+      changed = ensureYamlForbiddenResponse(lines, path, method) || changed;
+    }
   }
 
   if (matchedEntitlementPath) {
@@ -714,9 +730,12 @@ function injectYamlEntitlementContract(text) {
   }
 
   for (const [path, gate] of PUBLIC_FORBIDDEN_GATES) {
-    if (!findYamlPathRange(lines, path)) continue;
-    changed = ensureYamlGateDescription(lines, path, gate.note) || changed;
-    changed = ensureYamlForbiddenResponse(lines, path, YAML_BOT_FORBIDDEN_RESPONSE) || changed;
+    const methods = methodsByPath.get(path);
+    if (!methods) continue;
+    for (const method of methods) {
+      changed = ensureYamlGateDescription(lines, path, method, gate.note) || changed;
+      changed = ensureYamlForbiddenResponse(lines, path, method, YAML_BOT_FORBIDDEN_RESPONSE) || changed;
+    }
   }
 
   return { text: lines.join('\n'), changed };
@@ -833,6 +852,32 @@ function ensureYamlOperationSecurity(lines, path, method, kind) {
   return true;
 }
 
+// Remove any operation-level `security:` block. Mirrors injectJson's
+// `delete op.security` for non-public/non-bearer ops so that a path dropped
+// from the bearer sources sheds its stale BearerAuth block and re-inherits the
+// root API-key requirement (otherwise the YAML would drift from its JSON sibling
+// and the contract test would fail).
+function removeYamlOperationSecurity(lines, path, method) {
+  const op = findYamlOperationRangeForMethod(lines, path, method);
+  if (!op) return false;
+  const existing = findYamlOperationSecurityRange(lines, op);
+  if (!existing) return false;
+  lines.splice(existing.start, existing.end - existing.start);
+  return true;
+}
+
+// Remove a stale `401` response. Mirrors injectJson's `delete op.responses['401']`
+// for public ops so that a path moved into PUBLIC_NO_AUTH_RPC_PATHS drops the
+// 401-for-missing-key it can no longer return.
+function removeYamlUnauthorizedResponse(lines, path, method) {
+  const op = findYamlOperationRangeForMethod(lines, path, method);
+  if (!op) return false;
+  const existing = findYamlResponseRange(lines, op, '                "401":');
+  if (!existing) return false;
+  lines.splice(existing.start, existing.end - existing.start);
+  return true;
+}
+
 // Enumerate operations by text scan (no YAML parser): a path is a 4-space key
 // beginning with `/`; its methods are the 8-space HTTP-verb keys inside the
 // path block (which ends at the next path or any shallower-indented line,
@@ -872,12 +917,19 @@ function injectYamlAuthContract(text) {
   for (const { path, methods } of operations) {
     for (const method of methods) {
       if (PUBLIC_PATHS.has(path)) {
-        // Public RPC: opt out of the root requirement, carry no 401.
+        // Public RPC: opt out of the root requirement, carry no 401. Drop any
+        // stale 401 left over from when the path was authenticated.
         changed = ensureYamlOperationSecurity(lines, path, method, 'public') || changed;
+        changed = removeYamlUnauthorizedResponse(lines, path, method) || changed;
       } else {
         changed = ensureYamlUnauthorizedResponse(lines, path, method) || changed;
         if (BEARER_AUTH_PATHS.has(path)) {
           changed = ensureYamlOperationSecurity(lines, path, method, 'bearer') || changed;
+        } else {
+          // Non-bearer op inherits the root API-key requirement; strip any
+          // stale operation-level security (e.g. a BearerAuth block left from
+          // when the path was in a bearer source).
+          changed = removeYamlOperationSecurity(lines, path, method) || changed;
         }
       }
     }
