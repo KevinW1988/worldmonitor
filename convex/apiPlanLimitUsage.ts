@@ -260,6 +260,24 @@ export const listActivePaidEntitlements = internalQuery({
   },
 });
 
+// Bounded-concurrency map: runs `fn` over `items` in fixed-size batches so a
+// large active-customer set doesn't serialize hundreds of Upstash round trips
+// (nor fire them all at once). Order-independent -- callers key results by row.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += limit) {
+    const chunk = items.slice(i, i + limit);
+    results.push(...(await Promise.all(chunk.map(fn))));
+  }
+  return results;
+}
+
+const REDIS_READ_CONCURRENCY = 10;
+
 async function buildProductionRows(
   active: ActiveEntitlement[],
   now: number,
@@ -343,43 +361,50 @@ async function buildProductionRows(
   }
 
   const meterDate = new Date(now);
+  type DailyRead = {
+    userId: string;
+    planKey: string;
+    dimension: PlanLimitDimension;
+    source: string;
+  };
+  const reads: DailyRead[] = [];
   for (const ent of active) {
     // api_daily_requests: read the SAME per-account daily meter #3199 enforces
     // on, keyed by userId. Skip unlimited plans (null limit == enterprise; the
     // gateway never meters them, so the key is absent anyway).
     if (ent.apiAccess && getPlanLimit(ent.planKey, "api_daily_requests") != null) {
-      const usage = await readRedisInteger(apiDailyMeterKey(ent.userId, meterDate));
-      if (usage == null) {
-        blocked.push({ userId: ent.userId, dimension: "api_daily_requests", reason: "redis_read_failed" });
-      } else {
-        rows.push({
-          userId: ent.userId,
-          planKey: ent.planKey,
-          dimension: "api_daily_requests",
-          usage,
-          source: "redis:apikey_day",
-          sourceFreshAt: now,
-        });
-      }
+      reads.push({ userId: ent.userId, planKey: ent.planKey, dimension: "api_daily_requests", source: "redis:apikey_day" });
     }
-
     // mcp_daily_calls: existing Pro daily-counter fallback (unchanged).
     const isPro = ent.planKey === "pro_monthly" || ent.planKey === "pro_annual";
     if (isPro && ent.mcpAccess) {
-      const usage = await readRedisInteger(dailyCounterKey(ent.userId, meterDate));
-      if (usage == null) {
-        blocked.push({ userId: ent.userId, dimension: "mcp_daily_calls", reason: "redis_read_failed" });
-      } else {
-        rows.push({
-          userId: ent.userId,
-          planKey: ent.planKey,
-          dimension: "mcp_daily_calls",
-          usage,
-          source: "redis:mcp_pro_daily",
-          sourceFreshAt: now,
-        });
-      }
+      reads.push({ userId: ent.userId, planKey: ent.planKey, dimension: "mcp_daily_calls", source: "redis:mcp_pro_daily" });
     }
+  }
+
+  // Read the per-user daily counters in bounded-concurrency batches instead of
+  // one sequential round trip per user, so the hourly scan's wall-clock doesn't
+  // grow linearly with the paid-customer count.
+  const readResults = await mapWithConcurrency(reads, REDIS_READ_CONCURRENCY, async (read) => {
+    const key = read.dimension === "api_daily_requests"
+      ? apiDailyMeterKey(read.userId, meterDate)
+      : dailyCounterKey(read.userId, meterDate);
+    return { read, usage: await readRedisInteger(key) };
+  });
+
+  for (const { read, usage } of readResults) {
+    if (usage == null) {
+      blocked.push({ userId: read.userId, dimension: read.dimension, reason: "redis_read_failed" });
+      continue;
+    }
+    rows.push({
+      userId: read.userId,
+      planKey: read.planKey,
+      dimension: read.dimension,
+      usage,
+      source: read.source,
+      sourceFreshAt: now,
+    });
   }
 
   return { rows, blocked };
