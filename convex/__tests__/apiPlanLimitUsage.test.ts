@@ -349,6 +349,60 @@ describe("api plan-limit usage scanner", () => {
     expect(notices.filter((n) => n.current)).toHaveLength(0);
   });
 
+  test("bounded-concurrency reads attribute each user's meter to their own notice", async () => {
+    const t = convexTest(schema, modules);
+    await seedEntitlement(t, "user-a", "api_starter");
+    await seedEntitlement(t, "user-b", "api_starter");
+    vi.stubEnv("AXIOM_QUERY_TOKEN", "test-token");
+    vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://upstash.test");
+    vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", "upstash-token");
+    // Two concurrent meter reads in one batch, distinct values keyed by userId.
+    // A misattribution bug (result paired to the wrong `read`) would blame the
+    // wrong customer -- assert each user's rollup carries their OWN usage.
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes("api.axiom.co")) return new Response(JSON.stringify({ matches: [] }), { status: 200 });
+      if (u.includes("user-a")) return new Response(JSON.stringify({ result: "400" }), { status: 200 });
+      if (u.includes("user-b")) return new Response(JSON.stringify({ result: "1500" }), { status: 200 });
+      return new Response(JSON.stringify({ result: "0" }), { status: 200 });
+    }));
+
+    await t.action(usageFns.scanApiPlanLimitUsageInternal, { now: NOW });
+
+    const rollups = await t.run((ctx) => ctx.db.query("apiUsageRollups").collect());
+    const usageByUser = Object.fromEntries(
+      rollups.filter((r) => r.dimension === "api_daily_requests").map((r) => [r.userId, r.usage]),
+    );
+    expect(usageByUser["user-a"]).toBe(400);
+    expect(usageByUser["user-b"]).toBe(1_500);
+    const overUsers = (await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect()))
+      .filter((n) => n.current && n.state === "over_limit")
+      .map((n) => n.userId);
+    expect(overUsers).toEqual(["user-b"]); // only the truly-over user is flagged
+  });
+
+  test("dead-zone refresh then recovery: over -> dead zone -> recovered clears the notice", async () => {
+    const t = convexTest(schema, modules);
+    await seedEntitlement(t, "user-api", "api_starter");
+    const scan = (usage: number, at: number) =>
+      t.action(usageFns.scanApiPlanLimitUsageInternal, {
+        now: at,
+        rows: [{ userId: "user-api", dimension: "api_daily_requests", usage, source: "test" }],
+      });
+
+    await scan(1_200, NOW); // over_limit -> current notice
+    await scan(700, NOW + 3_600_000); // dead zone (0.7): U4 refresh, notice stays current
+    const live = (await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).filter((n) => n.current);
+    expect(live).toHaveLength(1);
+    expect(live[0].lastSeenAt).toBe(NOW + 3_600_000); // refreshed
+    expect(live[0].usage).toBe(700);
+
+    const summary = await scan(300, NOW + 7_200_000); // 0.3 < 0.5 -> per-row recovery
+    expect(summary.recovered).toBe(1);
+    const stillCurrent = (await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).filter((n) => n.current);
+    expect(stillCurrent).toHaveLength(0);
+  });
+
   test("skips rows that cannot be joined to an active entitlement", async () => {
     const t = convexTest(schema, modules);
 

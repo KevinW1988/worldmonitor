@@ -70,4 +70,21 @@ describe("api plan-limit retention prune", () => {
     expect(notices.map((n) => n.windowKey).sort()).toEqual(["old-live", "recent"]);
     expect(rollups.map((r) => r.windowKey)).toEqual(["recent"]);
   });
+
+  test("deletes at most `limit` per run and drains the rest on the next run", async () => {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 3; i++) {
+        await ctx.db.insert("apiPlanLimitNotices", notice({ windowKey: `old-${i}`, lastSeenAt: NOW - 200 * DAY }));
+      }
+    });
+
+    const first = await t.mutation(pruneFns.pruneApiPlanLimitData, { now: NOW, limit: 2 });
+    expect(first.noticesDeleted).toBe(2);
+    expect(await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).toHaveLength(1);
+
+    const second = await t.mutation(pruneFns.pruneApiPlanLimitData, { now: NOW, limit: 2 });
+    expect(second.noticesDeleted).toBe(1);
+    expect(await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).toHaveLength(0);
+  });
 });

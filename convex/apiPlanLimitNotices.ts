@@ -551,10 +551,14 @@ export const pruneApiPlanLimitData = internalMutation({
   args: {
     now: v.optional(v.number()),
     retentionMs: v.optional(v.number()),
+    // Per-run, per-table delete cap. Optional so tests can drive the drain-over-
+    // multiple-runs behavior without seeding PRUNE_BATCH rows.
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const now = args.now ?? Date.now();
     const cutoff = now - (args.retentionMs ?? RETENTION_MS);
+    const batch = args.limit ?? PRUNE_BATCH;
 
     // Superseded notices older than the retention window. The by_current index
     // scopes the scan to current:false, so an active notice is never read or
@@ -562,7 +566,7 @@ export const pruneApiPlanLimitData = internalMutation({
     const staleNotices = await ctx.db
       .query("apiPlanLimitNotices")
       .withIndex("by_current", (q) => q.eq("current", false).lt("lastSeenAt", cutoff))
-      .take(PRUNE_BATCH);
+      .take(batch);
     for (const notice of staleNotices) {
       await ctx.db.delete(notice._id);
     }
@@ -571,7 +575,7 @@ export const pruneApiPlanLimitData = internalMutation({
     const staleRollups = await ctx.db
       .query("apiUsageRollups")
       .withIndex("by_computedAt", (q) => q.lt("computedAt", cutoff))
-      .take(PRUNE_BATCH);
+      .take(batch);
     for (const rollup of staleRollups) {
       await ctx.db.delete(rollup._id);
     }
