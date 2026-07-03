@@ -170,8 +170,6 @@ export default async function handler(req, ctx) {
         assertAllowedRedirect(redirectUrl);
         currentUrl = redirectUrl;
       }
-
-      throw new RssProxyPolicyError('Too many redirects', 502);
     };
 
     let response;

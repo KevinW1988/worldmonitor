@@ -117,6 +117,30 @@ test('rejects redirects that switch away from http or https', async () => {
   assert.deepEqual(calls, [{ url: 'https://techcrunch.com/feed', redirect: 'manual' }]);
 });
 
+test('rejects direct RSS fetches that exceed the redirect limit', async () => {
+  const calls = [];
+  globalThis.fetch = async (input, init = {}) => {
+    calls.push({ url: String(input), redirect: init.redirect });
+    return new Response('', {
+      status: 302,
+      headers: { Location: `https://www.techcrunch.com/feed-hop-${calls.length}` },
+    });
+  };
+
+  const res = await handler(makeRequest('https://techcrunch.com/feed'));
+  const body = await res.json();
+
+  assert.equal(res.status, 502);
+  assert.equal(body.error, 'Too many redirects');
+  assert.deepEqual(calls.map((call) => call.url), [
+    'https://techcrunch.com/feed',
+    'https://www.techcrunch.com/feed-hop-1',
+    'https://www.techcrunch.com/feed-hop-2',
+    'https://www.techcrunch.com/feed-hop-3',
+  ]);
+  assert.deepEqual(calls.map((call) => call.redirect), ['manual', 'manual', 'manual', 'manual']);
+});
+
 test('preserves Railway relay fallback for direct-fetch transport failures', async () => {
   process.env.WS_RELAY_URL = 'wss://relay.example.com';
   process.env.RELAY_SHARED_SECRET = 'relay-secret';
