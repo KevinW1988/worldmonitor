@@ -161,6 +161,52 @@ describe("api plan-limit notice persistence", () => {
     expect(rows[0].current).toBe(false);
   });
 
+  test("live-notice lookups ignore accumulated non-current history", async () => {
+    const t = convexTest(schema, modules);
+    // Pile up superseded (current:false) history for one (user, dimension).
+    await t.run(async (ctx) => {
+      for (let i = 1; i <= 6; i++) {
+        await ctx.db.insert("apiPlanLimitNotices", {
+          userId: "user-api",
+          planKey: "api_starter",
+          dimension: "api_daily_requests",
+          state: "over_limit",
+          windowKey: `2026-06-0${i}`,
+          firstSeenAt: NOW,
+          lastSeenAt: NOW,
+          usage: 1_500,
+          limit: 1_000,
+          usageRatio: 1.5,
+          current: false,
+          emailStatus: "sent",
+          ctaKind: "contact_support",
+        });
+      }
+    });
+
+    // One live notice via the normal path.
+    await t.mutation(internalFns.recordUsageEvaluation, {
+      rollup: rollup({ usage: 1_200 }),
+      notice: { state: "over_limit", ctaKind: "contact_support" },
+    });
+
+    // Settings list returns only the single live, unacknowledged notice.
+    const visible = await t.withIdentity(USER).query(publicFns.listCurrentForUser, {});
+    expect(visible).toHaveLength(1);
+    expect(visible[0].current).toBe(true);
+    expect(visible[0].usage).toBe(1_200);
+
+    // Supersede keeps exactly one current row despite the 6-row history pile.
+    const currentRows = await t.run((ctx) =>
+      ctx.db
+        .query("apiPlanLimitNotices")
+        .withIndex("by_user_dimension_current", (q) =>
+          q.eq("userId", "user-api").eq("dimension", "api_daily_requests").eq("current", true),
+        )
+        .collect());
+    expect(currentRows).toHaveLength(1);
+  });
+
   test("dismissal persists across a same-window rescan", async () => {
     const t = convexTest(schema, modules);
     const created = await t.mutation(internalFns.recordUsageEvaluation, {

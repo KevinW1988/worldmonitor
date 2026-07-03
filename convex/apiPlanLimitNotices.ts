@@ -247,23 +247,22 @@ export const recordUsageEvaluation = internalMutation({
     // dims), and the Settings UI stacks duplicate banners. Only the notice we
     // are about to upsert (same state + window) stays current, so at most one
     // live notice exists per dimension.
-    for (const state of API_PLAN_LIMIT_NOTICE_STATES) {
-      const priorCurrent = await ctx.db
-        .query("apiPlanLimitNotices")
-        .withIndex("by_user_state", (q) =>
-          q.eq("userId", args.rollup.userId).eq("state", state),
-        )
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("dimension"), args.rollup.dimension),
-            q.eq(q.field("current"), true),
-          ),
-        )
-        .collect();
-      for (const prior of priorCurrent) {
-        if (existingNotice && prior._id === existingNotice._id) continue;
-        await ctx.db.patch(prior._id, { current: false, lastSeenAt: now });
-      }
+    // Query the current-scoped index directly instead of scanning the full
+    // per-(user,state) history for all 3 states and filtering `current` in
+    // memory -- the table grows without bound as superseded rows accumulate, so
+    // the old post-index filter read O(lifetime notices) on this hot path.
+    const priorCurrent = await ctx.db
+      .query("apiPlanLimitNotices")
+      .withIndex("by_user_dimension_current", (q) =>
+        q
+          .eq("userId", args.rollup.userId)
+          .eq("dimension", args.rollup.dimension)
+          .eq("current", true),
+      )
+      .collect();
+    for (const prior of priorCurrent) {
+      if (existingNotice && prior._id === existingNotice._id) continue;
+      await ctx.db.patch(prior._id, { current: false, lastSeenAt: now });
     }
 
     const noticePatch = {
@@ -315,24 +314,18 @@ export const clearRecoveredCurrentNotices = internalMutation({
   },
   handler: async (ctx, args) => {
     let cleared = 0;
-    for (const state of API_PLAN_LIMIT_NOTICE_STATES) {
-      const notices = await ctx.db
-        .query("apiPlanLimitNotices")
-        .withIndex("by_user_state", (q) => q.eq("userId", args.userId).eq("state", state))
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("dimension"), args.dimension),
-            q.eq(q.field("current"), true),
-          ),
-        )
-        .collect();
-      for (const notice of notices) {
-        await ctx.db.patch(notice._id, {
-          current: false,
-          lastSeenAt: args.recoveredAt,
-        });
-        cleared += 1;
-      }
+    const notices = await ctx.db
+      .query("apiPlanLimitNotices")
+      .withIndex("by_user_dimension_current", (q) =>
+        q.eq("userId", args.userId).eq("dimension", args.dimension).eq("current", true),
+      )
+      .collect();
+    for (const notice of notices) {
+      await ctx.db.patch(notice._id, {
+        current: false,
+        lastSeenAt: args.recoveredAt,
+      });
+      cleared += 1;
     }
     return { cleared };
   },
@@ -373,12 +366,14 @@ export const listCurrentForUser = query({
   handler: async (ctx) => {
     const userId = await requireUserId(ctx);
     const notices = [];
-    for (const state of API_PLAN_LIMIT_NOTICE_STATES) {
+    // One indexed query per dimension returns only that dimension's live
+    // notice(s) -- at most one after supersession -- instead of scanning the
+    // user's full per-state history and filtering `current` in memory.
+    for (const dimension of API_PLAN_LIMIT_DIMENSIONS) {
       const rows = await ctx.db
         .query("apiPlanLimitNotices")
-        .withIndex("by_user_state", (q) => q.eq("userId", userId).eq("state", state))
-        .filter((q) =>
-          q.eq(q.field("current"), true),
+        .withIndex("by_user_dimension_current", (q) =>
+          q.eq("userId", userId).eq("dimension", dimension).eq("current", true),
         )
         .collect();
       notices.push(...rows.filter((notice) => notice.acknowledgedAt === undefined));

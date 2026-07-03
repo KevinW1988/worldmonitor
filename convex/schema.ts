@@ -645,7 +645,11 @@ export default defineSchema({
     .index("by_email_due", ["emailStatus", "lastSeenAt"])
     // Only-`current` scans (readiness gate + stale-notice recovery sweep) query
     // through this index instead of collecting the whole (ever-growing) table.
-    .index("by_current", ["current", "lastSeenAt"]),
+    .index("by_current", ["current", "lastSeenAt"])
+    // Per-user live-notice lookups (supersede loop, recovery clear, Settings
+    // list) query this instead of scanning all per-(user,state) history and
+    // filtering `current` in memory -- bounds the hot path to live rows.
+    .index("by_user_dimension_current", ["userId", "dimension", "current"]),
 
   customers: defineTable({
     userId: v.string(),
