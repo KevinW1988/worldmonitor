@@ -125,6 +125,46 @@ describe("api plan-limit notice persistence", () => {
     });
   });
 
+  test("writes no rollup for a below-threshold (no-notice) scan", async () => {
+    const t = convexTest(schema, modules);
+
+    // The scanner evaluates EVERY api-access/Pro account each run and the daily
+    // meter reads 0 for a missing key, so the no-notice case is the zero-usage
+    // majority. Persisting a rollup for it grew apiUsageRollups O(accounts)/day
+    // and outpaced the prune -- so a no-notice scan must write nothing.
+    const res = await t.mutation(internalFns.recordUsageEvaluation, {
+      rollup: rollup({ usage: 100 }),
+    });
+
+    expect(res.rollupId).toBeNull();
+    expect(res.noticeId).toBeNull();
+    expect(await t.run((ctx) => ctx.db.query("apiUsageRollups").collect())).toHaveLength(0);
+    expect(await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).toHaveLength(0);
+  });
+
+  test("a dead-zone rescan refreshes the live notice but adds no new rollup", async () => {
+    const t = convexTest(schema, modules);
+
+    // An over_limit scan writes exactly one rollup + notice.
+    await t.mutation(internalFns.recordUsageEvaluation, {
+      rollup: rollup({ usage: 1_200 }),
+      notice: { state: "over_limit", ctaKind: "billing_portal", upgradeTargetPlanKey: "api_business" },
+    });
+    expect(await t.run((ctx) => ctx.db.query("apiUsageRollups").collect())).toHaveLength(1);
+
+    // A dead-zone rescan (700/1000 = 0.7): no threshold notice -> no new rollup,
+    // but the live notice is still kept fresh (lastSeenAt/usage refreshed).
+    await t.mutation(internalFns.recordUsageEvaluation, {
+      rollup: rollup({ usage: 700, computedAt: NOW + 3_600_000 }),
+    });
+
+    expect(await t.run((ctx) => ctx.db.query("apiUsageRollups").collect())).toHaveLength(1);
+    const notice = (await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect()))[0];
+    expect(notice.current).toBe(true);
+    expect(notice.lastSeenAt).toBe(NOW + 3_600_000);
+    expect(notice.usage).toBe(700);
+  });
+
   test("acknowledgement hides only the current user's notice", async () => {
     const t = convexTest(schema, modules);
     const created = await t.mutation(internalFns.recordUsageEvaluation, {

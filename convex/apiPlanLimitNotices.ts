@@ -189,6 +189,37 @@ export const recordUsageEvaluation = internalMutation({
   },
   handler: async (ctx, args) => {
     const ratio = usageRatio(args.rollup.usage, args.rollup.limit);
+    if (!args.notice) {
+      // No threshold notice this scan. Do NOT persist an apiUsageRollups row
+      // here: the scanner evaluates EVERY api-access / Pro account each run and
+      // the daily meter reads 0 for a missing key, so the no-notice case is the
+      // zero-usage majority -- persisting it grew apiUsageRollups by
+      // O(accounts)/day and outpaced the daily prune (take(500)/day). Rollups
+      // are a write-only history of threshold *events* (nothing reads them for
+      // live behaviour), so they are persisted only when a notice fires (below).
+      // We still keep any live notice fresh (dead zone, ratio in [0.5, 0.8)) so
+      // getEnforcementReadiness doesn't mark it stale_notice_source; a genuine
+      // recovery (ratio < 0.5) is handled by the scanner's
+      // clearRecoveredCurrentNotices.
+      const openNotices = await ctx.db
+        .query("apiPlanLimitNotices")
+        .withIndex("by_user_dimension_current", (q) =>
+          q
+            .eq("userId", args.rollup.userId)
+            .eq("dimension", args.rollup.dimension)
+            .eq("current", true),
+        )
+        .collect();
+      for (const open of openNotices) {
+        await ctx.db.patch(open._id, {
+          lastSeenAt: args.rollup.computedAt,
+          usage: args.rollup.usage,
+          usageRatio: ratio,
+        });
+      }
+      return { rollupId: null, noticeId: null };
+    }
+
     const existingRollups = await ctx.db
       .query("apiUsageRollups")
       .withIndex("by_user_window", (q) =>
@@ -219,32 +250,6 @@ export const recordUsageEvaluation = internalMutation({
         windowKey: args.rollup.windowKey,
         ...rollupPatch,
       });
-    }
-
-    if (!args.notice) {
-      // Dead zone: no threshold notice this scan (e.g. daily ratio in
-      // [0.5, 0.8)), but the user was still observed -- keep any live notice
-      // fresh so getEnforcementReadiness doesn't mark it stale_notice_source
-      // after staleAfterMs and the Settings banner doesn't show a stale usage
-      // number. A genuine recovery (ratio < 0.5) is handled separately by the
-      // scanner's clearRecoveredCurrentNotices, which sets current:false.
-      const openNotices = await ctx.db
-        .query("apiPlanLimitNotices")
-        .withIndex("by_user_dimension_current", (q) =>
-          q
-            .eq("userId", args.rollup.userId)
-            .eq("dimension", args.rollup.dimension)
-            .eq("current", true),
-        )
-        .collect();
-      for (const open of openNotices) {
-        await ctx.db.patch(open._id, {
-          lastSeenAt: args.rollup.computedAt,
-          usage: args.rollup.usage,
-          usageRatio: ratio,
-        });
-      }
-      return { rollupId, noticeId: null };
     }
 
     const now = args.rollup.computedAt;

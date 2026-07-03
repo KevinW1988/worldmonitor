@@ -358,7 +358,8 @@ describe("api plan-limit usage scanner", () => {
     vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", "upstash-token");
     // Two concurrent meter reads in one batch, distinct values keyed by userId.
     // A misattribution bug (result paired to the wrong `read`) would blame the
-    // wrong customer -- assert each user's rollup carries their OWN usage.
+    // wrong customer -- assert the over_limit user carries their OWN usage and
+    // the below-threshold user is not flagged (and writes no rollup).
     vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
       const u = String(url);
       if (u.includes("api.axiom.co")) return new Response(JSON.stringify({ matches: [] }), { status: 200 });
@@ -369,16 +370,13 @@ describe("api plan-limit usage scanner", () => {
 
     await t.action(usageFns.scanApiPlanLimitUsageInternal, { now: NOW });
 
-    const rollups = await t.run((ctx) => ctx.db.query("apiUsageRollups").collect());
-    const usageByUser = Object.fromEntries(
-      rollups.filter((r) => r.dimension === "api_daily_requests").map((r) => [r.userId, r.usage]),
-    );
-    expect(usageByUser["user-a"]).toBe(400);
-    expect(usageByUser["user-b"]).toBe(1_500);
-    const overUsers = (await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect()))
-      .filter((n) => n.current && n.state === "over_limit")
-      .map((n) => n.userId);
-    expect(overUsers).toEqual(["user-b"]); // only the truly-over user is flagged
+    // user-b (1500 > 1000) is flagged over_limit carrying its OWN 1500; user-a
+    // (400, below the 800 warning floor) is not flagged and writes no rollup.
+    // A swap would flag user-a and drop user-b's notice to 400 (never over).
+    const dailyCurrent = (await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect()))
+      .filter((n) => n.current && n.dimension === "api_daily_requests");
+    expect(dailyCurrent.map((n) => n.userId)).toEqual(["user-b"]);
+    expect(dailyCurrent[0]).toMatchObject({ state: "over_limit", usage: 1_500 });
   });
 
   test("dead-zone refresh then recovery: over -> dead zone -> recovered clears the notice", async () => {
