@@ -616,7 +616,10 @@ export default defineSchema({
     computedAt: v.number(),
   })
     .index("by_user_window", ["userId", "windowKey"])
-    .index("by_window_dimension", ["windowKey", "dimension"]),
+    .index("by_window_dimension", ["windowKey", "dimension"])
+    // Age-ordered for the retention prune cron (burst mints one rollup per
+    // user per hourly scan, so this table grows without bound otherwise).
+    .index("by_computedAt", ["computedAt"]),
 
   apiPlanLimitNotices: defineTable({
     userId: v.string(),

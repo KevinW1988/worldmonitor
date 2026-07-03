@@ -30,6 +30,17 @@ crons.hourly(
 // webhook). The action no-ops when no ramp is configured, the ramp
 // is paused, kill-gated, or the prior wave hasn't settled yet —
 // see `convex/broadcast/rampRunner.ts` for the full state machine.
+// Daily retention prune for the plan-limit tables. apiUsageRollups gains a row
+// per user per hourly scan and apiPlanLimitNotices accumulates superseded rows,
+// neither with a native TTL — this ages both out past a 90-day window in
+// bounded per-run batches. See `pruneApiPlanLimitData` in apiPlanLimitNotices.ts.
+crons.daily(
+  "api-plan-limit-prune",
+  { hourUTC: 4, minuteUTC: 45 },
+  internal.apiPlanLimitNotices.pruneApiPlanLimitData,
+  {},
+);
+
 crons.daily(
   "broadcast-ramp-runner",
   { hourUTC: 13, minuteUTC: 0 },

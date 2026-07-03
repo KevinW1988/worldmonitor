@@ -537,3 +537,48 @@ export const getEnforcementReadiness = internalQuery({
     return summary;
   },
 });
+
+// Retention for the plan-limit tables. Both grow continuously -- apiUsageRollups
+// gains one row per user per hourly scan (burst windows are minute-grained) and
+// apiPlanLimitNotices accumulates superseded (current:false) rows forever, and
+// neither has a native TTL. 90 days keeps a comfortable audit window.
+const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+// Per-run, per-table delete cap so one invocation stays under Convex's
+// per-mutation write limit; a larger backlog drains over subsequent daily runs.
+const PRUNE_BATCH = 500;
+
+export const pruneApiPlanLimitData = internalMutation({
+  args: {
+    now: v.optional(v.number()),
+    retentionMs: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const now = args.now ?? Date.now();
+    const cutoff = now - (args.retentionMs ?? RETENTION_MS);
+
+    // Superseded notices older than the retention window. The by_current index
+    // scopes the scan to current:false, so an active notice is never read or
+    // deleted regardless of its age.
+    const staleNotices = await ctx.db
+      .query("apiPlanLimitNotices")
+      .withIndex("by_current", (q) => q.eq("current", false).lt("lastSeenAt", cutoff))
+      .take(PRUNE_BATCH);
+    for (const notice of staleNotices) {
+      await ctx.db.delete(notice._id);
+    }
+
+    // Rollups older than the retention window (audit records with no live reader).
+    const staleRollups = await ctx.db
+      .query("apiUsageRollups")
+      .withIndex("by_computedAt", (q) => q.lt("computedAt", cutoff))
+      .take(PRUNE_BATCH);
+    for (const rollup of staleRollups) {
+      await ctx.db.delete(rollup._id);
+    }
+
+    return {
+      noticesDeleted: staleNotices.length,
+      rollupsDeleted: staleRollups.length,
+    };
+  },
+});
