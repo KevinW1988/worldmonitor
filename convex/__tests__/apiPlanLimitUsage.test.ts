@@ -290,6 +290,31 @@ describe("api plan-limit usage scanner", () => {
     expect(after[0].acknowledgedAt).toBe(NOW); // dismiss survived
   });
 
+  test("per-row recovery clears a daily notice when usage drops below the recovery floor", async () => {
+    const t = convexTest(schema, modules);
+    await seedEntitlement(t, "user-api", "api_starter");
+
+    // Over the 1000/day Starter limit -> a current over_limit notice.
+    await t.action(usageFns.scanApiPlanLimitUsageInternal, {
+      now: NOW,
+      rows: [{ userId: "user-api", dimension: "api_daily_requests", usage: 1_200, source: "test" }],
+    });
+    let notices = await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect());
+    expect(notices.filter((n) => n.current)).toHaveLength(1);
+
+    // Next scan: usage falls below the 0.5x recovery floor (200/1000 = 0.2) while
+    // the user STILL produces a row -> the PER-ROW recovery path (shouldRecoverNotice
+    // -> clearRecoveredCurrentNotices) clears it. This is distinct from the
+    // stale-notice sweep (which fires only when the user produces no row at all).
+    const summary = await t.action(usageFns.scanApiPlanLimitUsageInternal, {
+      now: NOW + 3_600_000,
+      rows: [{ userId: "user-api", dimension: "api_daily_requests", usage: 200, source: "test" }],
+    });
+    expect(summary.recovered).toBe(1);
+    notices = await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect());
+    expect(notices.filter((n) => n.current)).toHaveLength(0);
+  });
+
   test("skips rows that cannot be joined to an active entitlement", async () => {
     const t = convexTest(schema, modules);
 
