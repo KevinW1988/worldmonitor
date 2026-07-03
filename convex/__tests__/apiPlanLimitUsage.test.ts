@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { internal } from "../_generated/api";
 import { getFeaturesForPlan } from "../lib/entitlements";
 import schema from "../schema";
@@ -23,6 +23,28 @@ async function seedEntitlement(t: ReturnType<typeof convexTest>, userId: string,
 }
 
 describe("api plan-limit usage scanner", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  test("a failing Axiom fetch degrades to a blocked source, not an aborted scan", async () => {
+    const t = convexTest(schema, modules);
+    // Token present so queryAxiom proceeds to fetch (which we make reject).
+    vi.stubEnv("AXIOM_QUERY_TOKEN", "test-token");
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new Error("simulated network failure / AbortSignal timeout");
+    }));
+
+    // Production path (no `rows`) -> buildProductionRows -> queryAxiom -> fetch throws.
+    // The scan must complete and record the failure as a blocked source rather
+    // than letting the rejection abort the whole hourly scan for every user.
+    const summary = await t.action(usageFns.scanApiPlanLimitUsageInternal, { now: NOW });
+
+    expect(summary.blocked.some((b: { reason?: string }) => b.reason === "axiom_query_error")).toBe(true);
+    expect(summary.notified).toBe(0);
+  });
+
   test("dry run reports would-notify without mutating notice state", async () => {
     const t = convexTest(schema, modules);
     await seedEntitlement(t, "user-api", "api_starter");

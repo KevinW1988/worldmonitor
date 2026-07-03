@@ -175,20 +175,29 @@ async function queryAxiom(apl: string, dimension: PlanLimitDimension): Promise<{
   const token = process.env.AXIOM_QUERY_TOKEN ?? process.env.AXIOM_API_TOKEN;
   if (!token) return { rows: [], blockedReason: "missing_axiom_query_token" };
 
-  const resp = await fetch(process.env.AXIOM_QUERY_URL ?? AXIOM_QUERY_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "worldmonitor-convex-plan-limit-scanner/1.0",
-    },
-    body: JSON.stringify({ apl }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!resp.ok) {
-    return { rows: [], blockedReason: `axiom_query_http_${resp.status}` };
+  // A timeout (AbortSignal), DNS/network failure, or malformed JSON REJECTS the
+  // fetch/json promise -- which the `!resp.ok` branch below does NOT cover. An
+  // uncaught rejection here propagates through buildProductionRows and aborts
+  // the ENTIRE hourly scan for every user/dimension, so catch it and degrade to
+  // a blocked source (which the recovery sweep already refuses to false-clear).
+  try {
+    const resp = await fetch(process.env.AXIOM_QUERY_URL ?? AXIOM_QUERY_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "User-Agent": "worldmonitor-convex-plan-limit-scanner/1.0",
+      },
+      body: JSON.stringify({ apl }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) {
+      return { rows: [], blockedReason: `axiom_query_http_${resp.status}` };
+    }
+    return { rows: normalizeAxiomRows(await resp.json(), dimension) };
+  } catch {
+    return { rows: [], blockedReason: "axiom_query_error" };
   }
-  return { rows: normalizeAxiomRows(await resp.json(), dimension) };
 }
 
 function dailyCounterKey(userId: string, date: Date): string {
@@ -202,14 +211,20 @@ async function readRedisInteger(key: string): Promise<number | null> {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return null;
-  const resp = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!resp.ok) return null;
-  const data = await resp.json().catch(() => null) as { result?: unknown } | null;
-  const n = Number(data?.result ?? 0);
-  return Number.isFinite(n) ? n : 0;
+  // Same rejection risk as queryAxiom: a timeout/network error on the fetch must
+  // not escape and abort the scan. `null` signals a blocked read to the caller.
+  try {
+    const resp = await fetch(`${url}/get/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null) as { result?: unknown } | null;
+    const n = Number(data?.result ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return null;
+  }
 }
 
 export const listActivePaidEntitlements = internalQuery({
@@ -383,43 +398,51 @@ async function scanHandler(ctx: any, args: {
 
     if (dryRun) continue;
 
-    await ctx.runMutation(
-      (internal as any).apiPlanLimitNotices.recordUsageEvaluation,
-      {
-        rollup: {
-          userId: row.userId,
-          planKey,
-          dimension: row.dimension,
-          windowKey: window.windowKey,
-          noticeWindowKey: window.noticeWindowKey,
-          windowStart: window.windowStart,
-          windowEnd: window.windowEnd,
-          limit,
-          usage: row.usage,
-          source: row.source,
-          sourceFreshAt: row.sourceFreshAt ?? now,
-          computedAt: now,
+    // Contain a per-row mutation failure: one row hitting a Convex write/read
+    // limit (or any transient error) must not abort the whole hourly scan and
+    // starve every other user of notices/recovery this cycle.
+    try {
+      await ctx.runMutation(
+        (internal as any).apiPlanLimitNotices.recordUsageEvaluation,
+        {
+          rollup: {
+            userId: row.userId,
+            planKey,
+            dimension: row.dimension,
+            windowKey: window.windowKey,
+            noticeWindowKey: window.noticeWindowKey,
+            windowStart: window.windowStart,
+            windowEnd: window.windowEnd,
+            limit,
+            usage: row.usage,
+            source: row.source,
+            sourceFreshAt: row.sourceFreshAt ?? now,
+            computedAt: now,
+          },
+          notice: notice ?? undefined,
         },
-        notice: notice ?? undefined,
-      },
-    );
+      );
 
-    if (notice) {
-      summary.notified += 1;
+      if (notice) {
+        summary.notified += 1;
+        continue;
+      }
+
+      if (shouldRecoverNotice({
+        dimension: row.dimension,
+        usage: row.usage,
+        limit,
+        usageRatio: getUsageRatio(row.usage, limit),
+      })) {
+        const result = await ctx.runMutation(
+          (internal as any).apiPlanLimitNotices.clearRecoveredCurrentNotices,
+          { userId: row.userId, dimension: row.dimension, recoveredAt: now },
+        ) as { cleared: number };
+        summary.recovered += result.cleared;
+      }
+    } catch {
+      summary.blocked.push({ userId: row.userId, dimension: row.dimension, reason: "record_usage_failed" });
       continue;
-    }
-
-    if (shouldRecoverNotice({
-      dimension: row.dimension,
-      usage: row.usage,
-      limit,
-      usageRatio: getUsageRatio(row.usage, limit),
-    })) {
-      const result = await ctx.runMutation(
-        (internal as any).apiPlanLimitNotices.clearRecoveredCurrentNotices,
-        { userId: row.userId, dimension: row.dimension, recoveredAt: now },
-      ) as { cleared: number };
-      summary.recovered += result.cleared;
     }
   }
 
