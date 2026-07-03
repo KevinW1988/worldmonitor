@@ -207,6 +207,37 @@ describe("api plan-limit notice persistence", () => {
     expect(currentRows).toHaveLength(1);
   });
 
+  test("dead-zone rescans keep a live notice fresh so readiness doesn't false-stale it", async () => {
+    const t = convexTest(schema, modules);
+    const created = await t.mutation(internalFns.recordUsageEvaluation, {
+      rollup: rollup({ usage: 1_200 }),
+      notice: { state: "over_limit", ctaKind: "contact_support" },
+    });
+
+    // Three hourly rescans in the dead zone (700/1000 = 0.7): no threshold
+    // notice, and not recovered (recovery needs < 0.5), so recordUsageEvaluation
+    // is invoked with notice undefined. The live notice must stay observed.
+    for (const h of [1, 2, 3]) {
+      await t.mutation(internalFns.recordUsageEvaluation, {
+        rollup: rollup({ usage: 700, computedAt: NOW + h * 3_600_000 }),
+        notice: undefined,
+      });
+    }
+
+    const row = await t.run((ctx) => ctx.db.get(created.noticeId));
+    expect(row?.current).toBe(true);
+    expect(row?.lastSeenAt).toBe(NOW + 3 * 3_600_000); // tracked forward
+    expect(row?.usage).toBe(700); // banner shows the live reading, not stale 1200
+
+    // 3h05m after the first scan: NOT stale, because it was observed each hour.
+    const readiness = await t.query(internalFns.getEnforcementReadiness, {
+      now: NOW + 3 * 3_600_000 + 300_000,
+    });
+    expect(
+      readiness.blocked.filter((b: { readinessReason?: string }) => b.readinessReason === "stale_notice_source"),
+    ).toHaveLength(0);
+  });
+
   test("dismissal persists across a same-window rescan", async () => {
     const t = convexTest(schema, modules);
     const created = await t.mutation(internalFns.recordUsageEvaluation, {

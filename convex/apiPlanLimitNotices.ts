@@ -222,6 +222,28 @@ export const recordUsageEvaluation = internalMutation({
     }
 
     if (!args.notice) {
+      // Dead zone: no threshold notice this scan (e.g. daily ratio in
+      // [0.5, 0.8)), but the user was still observed -- keep any live notice
+      // fresh so getEnforcementReadiness doesn't mark it stale_notice_source
+      // after staleAfterMs and the Settings banner doesn't show a stale usage
+      // number. A genuine recovery (ratio < 0.5) is handled separately by the
+      // scanner's clearRecoveredCurrentNotices, which sets current:false.
+      const openNotices = await ctx.db
+        .query("apiPlanLimitNotices")
+        .withIndex("by_user_dimension_current", (q) =>
+          q
+            .eq("userId", args.rollup.userId)
+            .eq("dimension", args.rollup.dimension)
+            .eq("current", true),
+        )
+        .collect();
+      for (const open of openNotices) {
+        await ctx.db.patch(open._id, {
+          lastSeenAt: args.rollup.computedAt,
+          usage: args.rollup.usage,
+          usageRatio: ratio,
+        });
+      }
       return { rollupId, noticeId: null };
     }
 
