@@ -19,7 +19,7 @@
 const ALLOWED_HOST = /^(?:[a-z0-9-]+\.)?worldmonitor\.app$/;
 const FALLBACK_ORIGIN = 'https://worldmonitor.app';
 
-export function resolveMetadataOrigin(req: Request): string {
+export function resolveMetadataOrigin(req) {
   const url = new URL(req.url);
   const host = (req.headers.get('host') ?? url.host).toLowerCase();
   return ALLOWED_HOST.test(host) ? `https://${host}` : FALLBACK_ORIGIN;
@@ -30,9 +30,9 @@ export function resolveMetadataOrigin(req: Request): string {
  * reject everything else with a spec-correct 405 + Allow. Returns null when the
  * request should proceed to the metadata handler.
  */
-export function guardMetadataMethod(req: Request): Response | null {
+export function guardMetadataMethod(req) {
   if (req.method === 'GET' || req.method === 'HEAD') return null;
-  const cors: Record<string, string> = { 'Access-Control-Allow-Origin': '*' };
+  const cors = { 'Access-Control-Allow-Origin': '*' };
   if (req.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
