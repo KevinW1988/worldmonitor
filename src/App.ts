@@ -264,6 +264,8 @@ export class App {
 
     if (keySet.has(STORAGE_KEYS.monitors)) {
       this.state.monitors = loadFromStorage<Monitor[]>(STORAGE_KEYS.monitors, []);
+      const monitorPanel = this.state.panels['monitors'] as { setMonitors?: (monitors: Monitor[]) => void } | undefined;
+      monitorPanel?.setMonitors?.(this.state.monitors);
       this.dataLoader.updateMonitorResults();
     }
   }

@@ -20,6 +20,7 @@ import {
   applyMigrationChain,
   buildMigrations,
   mergeCloudWithLocalDirty,
+  parsePersistedDirtyKeys,
   settledDirtyKeys,
 } from './cloud-prefs-migrations';
 import {
@@ -45,6 +46,7 @@ const KEY_SYNC_VERSION = 'wm-cloud-sync-version';
 const KEY_LAST_SYNC_AT = 'wm-last-sync-at';
 const KEY_SYNC_STATE = 'wm-cloud-sync-state';
 const KEY_LAST_SIGNED_IN_AS = 'wm-last-signed-in-as';
+const KEY_DIRTY_KEYS = 'wm-cloud-prefs-dirty-keys';
 // Tracks the schema version of the LOCAL blob (i.e. what's in localStorage
 // right now). Distinct from the cloud row's schemaVersion. Required because
 // uploads can post local data without first fetching cloud (uploadNow,
@@ -92,6 +94,41 @@ let _cachedToken: string | null = null; // synchronous token cache for flush()
 // install() setItem/removeItem patch records them; a clean upload clears the
 // SETTLED ones. See resolveConflictWithMerge + mergeCloudWithLocalDirty.
 const _dirtyKeys = new Set<CloudSyncKey>();
+let _dirtyKeysUserId: string | null = null;
+
+function persistDirtyKeys(): void {
+  try {
+    if (_dirtyKeys.size === 0 || !_dirtyKeysUserId) {
+      Storage.prototype.removeItem.call(localStorage, KEY_DIRTY_KEYS);
+      return;
+    }
+    Storage.prototype.setItem.call(localStorage, KEY_DIRTY_KEYS, JSON.stringify({
+      userId: _dirtyKeysUserId,
+      keys: [..._dirtyKeys],
+    }));
+  } catch {
+    // localStorage unavailable: keep the in-memory guard for this page view.
+  }
+}
+
+function hydrateDirtyKeysFromStorage(userId: string): void {
+  try {
+    _dirtyKeys.clear();
+    _dirtyKeysUserId = userId;
+    const raw = localStorage.getItem(KEY_DIRTY_KEYS);
+    for (const key of parsePersistedDirtyKeys(raw, CLOUD_SYNC_KEYS, userId)) {
+      _dirtyKeys.add(key as CloudSyncKey);
+    }
+    if (raw !== null && _dirtyKeys.size === 0) persistDirtyKeys();
+  } catch {
+    // localStorage unavailable: the in-memory set remains the best effort.
+  }
+}
+
+function markDirtyKey(key: CloudSyncKey): void {
+  _dirtyKeys.add(key);
+  persistDirtyKeys();
+}
 
 /**
  * Clear dirty keys that a just-succeeded upload actually durably synced —
@@ -107,9 +144,11 @@ const _dirtyKeys = new Set<CloudSyncKey>();
  * current local value.
  */
 function clearSettledDirtyKeys(postedBlob: Record<string, string>): void {
+  let changed = false;
   for (const key of settledDirtyKeys(postedBlob, buildCloudBlob(), _dirtyKeys)) {
-    _dirtyKeys.delete(key as CloudSyncKey);
+    changed = _dirtyKeys.delete(key as CloudSyncKey) || changed;
   }
+  if (changed) persistDirtyKeys();
 }
 
 // ── 503 retry tracking ───────────────────────────────────────────────────────
@@ -401,6 +440,7 @@ export async function onSignIn(userId: string, variant: string): Promise<void> {
   clearRetryTimer();
   _authGeneration += 1;
   const myGeneration = _authGeneration;
+  hydrateDirtyKeysFromStorage(userId);
 
   _currentVariant = variant;
   setState('syncing');
@@ -525,6 +565,8 @@ export function onSignOut(): void {
   // Dirty-key tracking is per-user session state — drop it so edits made by
   // the next signed-in user don't merge against the prior user's pending set.
   _dirtyKeys.clear();
+  _dirtyKeysUserId = null;
+  persistDirtyKeys();
 
   // Preserve prefs; only clear sync metadata
   localStorage.removeItem(KEY_SYNC_VERSION);
@@ -638,7 +680,7 @@ export function install(variant: string): void {
   Storage.prototype.setItem = function setItem(key: string, value: string) {
     originalSetItem.call(this, key, value);
     if (this === localStorage && !_suppressPatch && CLOUD_SYNC_KEYS.includes(key as CloudSyncKey)) {
-      _dirtyKeys.add(key as CloudSyncKey);
+      markDirtyKey(key as CloudSyncKey);
       schedulePrefUpload(_currentVariant);
     }
   };
@@ -647,7 +689,7 @@ export function install(variant: string): void {
   Storage.prototype.removeItem = function removeItem(key: string) {
     originalRemoveItem.call(this, key);
     if (this === localStorage && !_suppressPatch && CLOUD_SYNC_KEYS.includes(key as CloudSyncKey)) {
-      _dirtyKeys.add(key as CloudSyncKey);
+      markDirtyKey(key as CloudSyncKey);
       schedulePrefUpload(_currentVariant);
     }
   };

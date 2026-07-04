@@ -67,6 +67,11 @@ describe('cloud prefs panel sync guardrails', () => {
     );
     assert.match(
       appSrc,
+      /monitorPanel\?\.setMonitors\?\.\(this\.state\.monitors\)/,
+      'App must update an already-mounted My Monitors panel when cloud prefs change monitors',
+    );
+    assert.match(
+      appSrc,
       /const panelOrderKey = this\.state\.PANEL_ORDER_KEY;/,
       'App must derive the panel order key from PANEL_ORDER_KEY',
     );
@@ -79,6 +84,41 @@ describe('cloud prefs panel sync guardrails', () => {
       appSrc,
       /keySet\.has\('panel-order'\)/,
       'App must not hard-code the panel-order key in the cloud apply path',
+    );
+  });
+
+  it('persists dirty cloud preference keys across reloads until upload settles', () => {
+    const cloudSyncSrc = readSrc('src/utils/cloud-prefs-sync.ts');
+
+    assert.match(
+      cloudSyncSrc,
+      /const KEY_DIRTY_KEYS = 'wm-cloud-prefs-dirty-keys'/,
+      'cloud prefs sync must store pending dirty-key metadata outside the uploaded blob',
+    );
+    assert.match(
+      cloudSyncSrc,
+      /hydrateDirtyKeysFromStorage\(userId\);/,
+      'cloud prefs sync must restore dirty keys for the signed-in user before resolving sign-in conflicts',
+    );
+    assert.match(
+      cloudSyncSrc,
+      /userId: _dirtyKeysUserId,[\s\S]*keys: \[\.\.\._dirtyKeys\]/,
+      'persisted dirty-key metadata must be scoped to the user that made the edit',
+    );
+    assert.doesNotMatch(
+      cloudSyncSrc,
+      /export function install[\s\S]*hydrateDirtyKeysFromStorage\(/,
+      'cloud prefs sync must not restore ownerless dirty keys at install time',
+    );
+    assert.match(
+      cloudSyncSrc,
+      /markDirtyKey\(key as CloudSyncKey\);/,
+      'local pref writes must persist their dirty-key marker before debounce upload',
+    );
+    assert.match(
+      cloudSyncSrc,
+      /if \(changed\) persistDirtyKeys\(\);/,
+      'successful uploads must clear only the dirty keys that actually settled',
     );
   });
 });
