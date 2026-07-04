@@ -2,6 +2,7 @@ import { getKeyPrefix } from './redis';
 import { PRO_DAILY_QUOTA_TTL_SECONDS, secondsUntilUtcMidnight } from './pro-mcp-token';
 
 export const DIRECT_LLM_DAILY_QUOTA_LIMIT = 50;
+export const DIRECT_LLM_REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS = 30;
 
 export const DIRECT_LLM_QUOTA_PATHS = new Set<string>([
   '/api/intelligence/v1/classify-event',
@@ -41,7 +42,13 @@ export async function reserveDirectLlmQuota(opts: {
 }): Promise<DirectLlmQuotaReservation> {
   const retryAfterSec = secondsUntilUtcMidnight(opts.date);
   const key = directLlmDailyQuotaKey(opts.userId, opts.date);
-  if (!key) return { ok: false, reason: 'redis-unavailable', retryAfterSec };
+  if (!key) {
+    return {
+      ok: false,
+      reason: 'redis-unavailable',
+      retryAfterSec: DIRECT_LLM_REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS,
+    };
+  }
 
   let pipeResult: Array<{ result?: unknown }> | null;
   try {
@@ -54,13 +61,21 @@ export async function reserveDirectLlmQuota(opts: {
   }
 
   if (!pipeResult || !Array.isArray(pipeResult) || pipeResult.length === 0) {
-    return { ok: false, reason: 'redis-unavailable', retryAfterSec };
+    return {
+      ok: false,
+      reason: 'redis-unavailable',
+      retryAfterSec: DIRECT_LLM_REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS,
+    };
   }
 
   const incrRaw = pipeResult[0]?.result;
   const newCount = typeof incrRaw === 'number' ? incrRaw : Number(incrRaw);
   if (!Number.isFinite(newCount) || newCount < 1) {
-    return { ok: false, reason: 'redis-unavailable', retryAfterSec };
+    return {
+      ok: false,
+      reason: 'redis-unavailable',
+      retryAfterSec: DIRECT_LLM_REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS,
+    };
   }
 
   let rolledBack = false;

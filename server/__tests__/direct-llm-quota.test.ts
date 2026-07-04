@@ -4,6 +4,8 @@ import { describe, expect, test } from "vitest";
 
 import {
   DIRECT_LLM_DAILY_QUOTA_LIMIT,
+  DIRECT_LLM_QUOTA_PATHS,
+  DIRECT_LLM_REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS,
   directLlmDailyQuotaKey,
   reserveDirectLlmQuota,
 } from "../_shared/direct-llm-quota";
@@ -48,16 +50,33 @@ describe("direct LLM daily quota", () => {
       ok: false,
       reason: "cap-exceeded",
       floor: DIRECT_LLM_DAILY_QUOTA_LIMIT,
+      retryAfterSec: 43_200,
     });
     expect(calls.at(-1)).toEqual([["DECR", "llm:direct-usage:user_123:2026-07-04"]]);
   });
 
-  test("fails closed when Redis reservation cannot be proven", async () => {
+  test("fails closed with a short retry window when Redis reservation cannot be proven", async () => {
     const result = await reserveDirectLlmQuota({
       userId: "user_123",
+      date: new Date(Date.UTC(2026, 6, 4, 12, 0, 0)),
       pipeline: async () => [],
     });
 
-    expect(result).toMatchObject({ ok: false, reason: "redis-unavailable" });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "redis-unavailable",
+      retryAfterSec: DIRECT_LLM_REDIS_UNAVAILABLE_RETRY_AFTER_SECONDS,
+    });
+  });
+
+  test("documents all direct LLM quota paths in one canonical set", () => {
+    expect([...DIRECT_LLM_QUOTA_PATHS].sort()).toEqual([
+      "/api/chat-analyst",
+      "/api/intelligence/v1/classify-event",
+      "/api/intelligence/v1/deduct-situation",
+      "/api/intelligence/v1/get-country-intel-brief",
+      "/api/market/v1/analyze-stock",
+      "/api/news/v1/summarize-article",
+    ]);
   });
 });

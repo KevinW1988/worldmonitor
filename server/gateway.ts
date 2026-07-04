@@ -52,6 +52,7 @@ import {
 } from './_shared/api-key-rate-limit';
 import {
   DIRECT_LLM_DAILY_QUOTA_LIMIT,
+  DIRECT_LLM_QUOTA_PATHS,
   reserveDirectLlmQuota,
 } from './_shared/direct-llm-quota';
 import {
@@ -548,13 +549,9 @@ function createGatewayAuthErrorResponse(
   });
 }
 
-const GATEWAY_DIRECT_LLM_QUOTA_PATHS = new Set<string>([
-  '/api/intelligence/v1/classify-event',
-  '/api/intelligence/v1/deduct-situation',
-  '/api/intelligence/v1/get-country-intel-brief',
-  '/api/market/v1/analyze-stock',
-  '/api/news/v1/summarize-article',
-]);
+const GATEWAY_DIRECT_LLM_QUOTA_PATHS = new Set<string>(
+  [...DIRECT_LLM_QUOTA_PATHS].filter((path) => path !== '/api/chat-analyst'),
+);
 
 const GATEWAY_DIRECT_LLM_QUOTA_METHODS: Record<string, string> = {
   '/api/intelligence/v1/classify-event': 'GET',
