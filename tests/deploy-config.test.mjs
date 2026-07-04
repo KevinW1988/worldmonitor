@@ -1424,6 +1424,8 @@ describe('agent readiness: MCP/OAuth origin alignment', () => {
       assert.equal(asJson.issuer, 'https://worldmonitor.app', `AS must not reflect spoofed host ${host}`);
       assert.equal(asJson.token_endpoint, 'https://worldmonitor.app/oauth/token', `AS token_endpoint must not carry spoofed host ${host}`);
       assert.equal(asJson.agent_auth.register_uri, 'https://worldmonitor.app/oauth/register');
+      assert.equal(asJson.agent_auth.claim_uri, 'https://worldmonitor.app/oauth/authorize', `AS claim_uri must not carry spoofed host ${host}`);
+      assert.equal(asJson.agent_auth.anonymous.claim_uri, 'https://worldmonitor.app/oauth/authorize');
     }
 
     // Legit subdomain still self-describes.
@@ -1479,6 +1481,25 @@ describe('agent readiness: auth.md walkthrough', () => {
     assert.ok(authMd.includes('https://workos.com/auth-md'), 'auth.md must reference the WorkOS spec');
     for (const keyword of ['agent_auth', 'register_uri', 'claim_uri', 'identity_assertion', 'id-jag', 'WWW-Authenticate']) {
       assert.ok(authMd.includes(keyword), `auth.md must mention spec keyword: ${keyword}`);
+    }
+  });
+
+  it('keeps every section header within the scanner read budget (~5 KB truncation)', () => {
+    // isitagentready / ora.ai reads only the first ~5 KB of auth.md; any `## `
+    // section header past that byte offset is dropped and the section reported
+    // missing (regressing auth-md-structure). This has bitten us before, so
+    // guard with a conservative ceiling — an edit that bloats an earlier
+    // section fails HERE instead of silently regressing the live scan.
+    const HEADER_BUDGET = 4800;
+    let offset = 0;
+    for (const line of authMd.split('\n')) {
+      if (line.startsWith('## ')) {
+        assert.ok(
+          offset < HEADER_BUDGET,
+          `"${line.trim()}" starts at byte ${offset}; must be < ${HEADER_BUDGET} to survive the ~5 KB scanner truncation`
+        );
+      }
+      offset += Buffer.byteLength(line, 'utf8') + 1; // + the newline that split() dropped
     }
   });
 
