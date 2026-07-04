@@ -129,7 +129,7 @@ import {
 } from '@/services/checkout';
 import {
   clearStoredAnonIdentity,
-  getStoredAnonClaimToken,
+  getFreshStoredAnonClaimToken,
   getStoredAnonId,
 } from '@/services/anonymous-identity-storage';
 import { captureReferralFromUrl } from '@/services/referral-capture';
@@ -1425,7 +1425,7 @@ export class App {
               console.warn('[billing] claimSubscription skipped — Convex auth not ready');
               return;
             }
-            const claimToken = getStoredAnonClaimToken() ?? undefined;
+            const claimToken = getFreshStoredAnonClaimToken() ?? undefined;
             const result = await client.mutation(api.payments.billing.claimSubscription, {
               anonId,
               ...(claimToken ? { claimToken } : {}),

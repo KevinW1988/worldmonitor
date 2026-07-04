@@ -22,6 +22,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   delete process.env.DODO_IDENTITY_SIGNING_SECRET;
+  delete process.env.DODO_ANON_CLAIM_TOKEN_TTL_MS;
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
 });
@@ -78,7 +79,7 @@ async function seedAnonClaimState(
       status: "active",
       currentPeriodStart: NOW - DAY_MS,
       currentPeriodEnd: NOW + 30 * DAY_MS,
-      rawPayload: { metadata: { wm_anon_claim: "v1" } },
+      rawPayload: { metadata: { wm_anon_claim: "v2" } },
       updatedAt: NOW,
     });
     await ctx.db.insert("entitlements", {
@@ -105,7 +106,7 @@ async function seedAnonClaimState(
       status: "succeeded",
       dodoSubscriptionId: "sub_anon_claim_001",
       planKey,
-      rawPayload: { metadata: { wm_anon_claim: "v1" } },
+      rawPayload: { metadata: { wm_anon_claim: "v2" } },
       occurredAt: NOW,
     });
 
@@ -158,6 +159,28 @@ describe("claimSubscription anonymous ownership proof", () => {
       t.withIdentity(CLAIMANT_B).mutation(api.payments.billing.claimSubscription, {
         anonId: ANON_USER_ID,
         claimToken: wrongToken,
+      }),
+    ).rejects.toThrow(/ANON_CLAIM_PROOF_REQUIRED/);
+
+    const realSub = await t.run(async (ctx) =>
+      ctx.db.query("subscriptions").withIndex("by_userId", (q) => q.eq("userId", CLAIMANT_B.subject)).first(),
+    );
+    expect(realSub).toBeNull();
+  });
+
+  test("rejects an expired proof token and leaves rows on the anon owner", async () => {
+    vi.useFakeTimers();
+    process.env.DODO_IDENTITY_SIGNING_SECRET = SIGNING_SECRET;
+    const t = convexTest(schema, modules);
+    await seedAnonClaimState(t);
+    vi.setSystemTime(NOW - 31 * DAY_MS);
+    const expiredToken = await signAnonClaimToken(ANON_USER_ID);
+    vi.setSystemTime(NOW);
+
+    await expect(
+      t.withIdentity(CLAIMANT_B).mutation(api.payments.billing.claimSubscription, {
+        anonId: ANON_USER_ID,
+        claimToken: expiredToken,
       }),
     ).rejects.toThrow(/ANON_CLAIM_PROOF_REQUIRED/);
 
@@ -258,6 +281,19 @@ describe("claimSubscription anonymous ownership proof", () => {
     ).resolves.toEqual({
       claimed: { subscriptions: 0, entitlements: 0, customers: 0, payments: 0 },
     });
+  });
+
+  test("rejects an invalid proof token even when there are no payment rows", async () => {
+    process.env.DODO_IDENTITY_SIGNING_SECRET = SIGNING_SECRET;
+    const t = convexTest(schema, modules);
+    const wrongToken = await signAnonClaimToken("22222222-2222-4222-8222-222222222222");
+
+    await expect(
+      t.withIdentity(CLAIMANT_B).mutation(api.payments.billing.claimSubscription, {
+        anonId: ANON_USER_ID,
+        claimToken: wrongToken,
+      }),
+    ).rejects.toThrow(/ANON_CLAIM_PROOF_REQUIRED/);
   });
 });
 

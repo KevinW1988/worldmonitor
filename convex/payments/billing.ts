@@ -962,6 +962,10 @@ export const claimSubscription = mutation({
       return { claimed: { subscriptions: 0, entitlements: 0, customers: 0, payments: 0 } };
     }
 
+    if (args.claimToken !== undefined && !(await verifyAnonClaimToken(args.anonId, args.claimToken))) {
+      throw new ConvexError({ kind: "ANON_CLAIM_PROOF_REQUIRED" });
+    }
+
     // Parallel reads for all anonId data — bounded to prevent runaway memory
     const [subs, anonEntitlement, customers, payments] = await Promise.all([
       ctx.db.query("subscriptions").withIndex("by_userId", (q) => q.eq("userId", args.anonId)).take(50),
@@ -979,7 +983,7 @@ export const claimSubscription = mutation({
       return { claimed: { subscriptions: 0, entitlements: 0, customers: 0, payments: 0 } };
     }
 
-    if (!(await verifyAnonClaimToken(args.anonId, args.claimToken))) {
+    if (args.claimToken === undefined) {
       throw new ConvexError({ kind: "ANON_CLAIM_PROOF_REQUIRED" });
     }
 

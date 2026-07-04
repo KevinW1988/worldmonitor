@@ -31,6 +31,7 @@ import { migrateLegacyKeysToHttpOnlySession, readLegacySessionKey } from './brow
 import { getStoredAnonId, saveAnonId } from './anonymous-identity-storage';
 export {
   clearStoredAnonIdentity,
+  getFreshStoredAnonClaimToken,
   getStoredAnonClaimToken,
   getStoredAnonId,
   saveAnonClaimToken,

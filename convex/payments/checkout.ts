@@ -196,7 +196,7 @@ async function _createCheckoutSession(
     ? await signAnonClaimToken(user.userId)
     : null;
   if (anonymousClaimToken) {
-    metadata.wm_anon_claim = "v1";
+    metadata.wm_anon_claim = "v2";
   }
   // Tier-group bridge for the duplicate-payment guard (#4438): the pending
   // `payment.processing` webhook echoes `data.metadata.wm_plan_key` and persists
