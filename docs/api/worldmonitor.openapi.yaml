@@ -11392,7 +11392,7 @@ paths:
                                 - "example"
                             "lang": "en"
                             "mode": "example"
-                            "provider": "worldmonitor"
+                            "provider": "openrouter"
                         schema:
                             $ref: '#/components/schemas/worldmonitor_news_v1_SummarizeArticleRequest'
                 required: true
@@ -11406,7 +11406,7 @@ paths:
                                 "errorType": "all"
                                 "fallback": true
                                 "model": "example"
-                                "provider": "worldmonitor"
+                                "provider": "openrouter"
                             schema:
                                 $ref: '#/components/schemas/worldmonitor_news_v1_SummarizeArticleResponse'
                 "400":
@@ -11520,7 +11520,7 @@ paths:
                                 "errorType": "all"
                                 "fallback": true
                                 "model": "example"
-                                "provider": "worldmonitor"
+                                "provider": "openrouter"
                             schema:
                                 $ref: '#/components/schemas/worldmonitor_news_v1_SummarizeArticleResponse'
                 "400":
@@ -13022,7 +13022,7 @@ paths:
                     2-digit HS commodity code (default "27" — mineral fuels). Non-digit
                      characters are stripped server-side to match legacy behavior.
                   required: false
-                  example: "2709"
+                  example: "27"
                   schema:
                     type: string
                 - name: jmespath

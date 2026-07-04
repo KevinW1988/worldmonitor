@@ -58,7 +58,7 @@ paths:
                     2-digit HS commodity code (default "27" — mineral fuels). Non-digit
                      characters are stripped server-side to match legacy behavior.
                   required: false
-                  example: "2709"
+                  example: "27"
                   schema:
                     type: string
                 - name: jmespath

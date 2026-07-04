@@ -37,7 +37,7 @@ paths:
                                 - "example"
                             "lang": "en"
                             "mode": "example"
-                            "provider": "worldmonitor"
+                            "provider": "openrouter"
                         schema:
                             $ref: '#/components/schemas/SummarizeArticleRequest'
                 required: true
@@ -51,7 +51,7 @@ paths:
                                 "errorType": "all"
                                 "fallback": true
                                 "model": "example"
-                                "provider": "worldmonitor"
+                                "provider": "openrouter"
                             schema:
                                 $ref: '#/components/schemas/SummarizeArticleResponse'
                 "400":
@@ -165,7 +165,7 @@ paths:
                                 "errorType": "all"
                                 "fallback": true
                                 "model": "example"
-                                "provider": "worldmonitor"
+                                "provider": "openrouter"
                             schema:
                                 $ref: '#/components/schemas/SummarizeArticleResponse'
                 "400":

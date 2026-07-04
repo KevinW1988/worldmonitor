@@ -115,6 +115,12 @@ const BASELINE_TYPE_EXAMPLE_ID = (() => {
 // enum, needs an override) and BLS (enum-resolved upstream) — disambiguate by
 // operation.
 function overrideStringExample(key, context = {}) {
+  if (key === 'jmespath') return 'keys(@)';
+  if (key.includes('hs2')) return '27';
+  if (key === 'provider') {
+    const where = (String(context.operationId ?? '') + ' ' + String(context.path ?? '')).toLowerCase();
+    if (where.includes('summarizearticle') || where.includes('summarize-article')) return 'openrouter';
+  }
   if (key.includes('chokepointid')) return CHOKEPOINT_EXAMPLE_ID;
   if (key.includes('scenarioid')) return SCENARIO_EXAMPLE_ID;
   if (key.includes('icao24')) return ICAO24_EXAMPLE;
