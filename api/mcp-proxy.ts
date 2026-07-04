@@ -87,6 +87,19 @@ const FORBIDDEN_CUSTOM_HEADER_NAMES = new Set([
   'upgrade',
 ]);
 
+// Cloud-metadata gate headers (GHSA-887j defence-in-depth on top of the socket
+// pin): GCP `Metadata-Flavor: Google`, Azure `Metadata: true`, AWS IMDSv2
+// `X-aws-ec2-metadata-token[-ttl-seconds]`. The pin already stops a DNS rebind
+// from reaching 169.254.169.254; never forwarding these is the belt to that
+// suspenders, so a credential-less metadata request can't be constructed even
+// if the pin were ever bypassed. Matched case-insensitively.
+const DENIED_FORWARD_HEADERS = new Set([
+  'metadata-flavor',
+  'metadata',
+  'x-aws-ec2-metadata-token',
+  'x-aws-ec2-metadata-token-ttl-seconds',
+]);
+
 function withProxyNoStore(headers: Record<string, string> = {}): Record<string, string> {
   return { ...headers, 'Cache-Control': 'no-store' };
 }
@@ -337,7 +350,8 @@ function buildHeaders(customHeaders) {
         // Strip CRLF to prevent header injection
         const safeKey = k.replace(/[\r\n]/g, '');
         const safeVal = v.replace(/[\r\n]/g, '');
-        if (FORBIDDEN_CUSTOM_HEADER_NAMES.has(safeKey.toLowerCase())) continue;
+        const lowerKey = safeKey.toLowerCase();
+        if (FORBIDDEN_CUSTOM_HEADER_NAMES.has(lowerKey) || DENIED_FORWARD_HEADERS.has(lowerKey)) continue;
         if (safeKey) h[safeKey] = safeVal;
       }
     }
