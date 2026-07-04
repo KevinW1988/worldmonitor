@@ -1,4 +1,4 @@
-FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS base
+FROM node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS base
 WORKDIR /app
 
 # Install Playwright dependencies. Tolerate transient Ubuntu mirror failures
