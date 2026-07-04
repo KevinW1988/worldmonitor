@@ -1,4 +1,6 @@
-# WorldMonitor — Agent Authentication (auth.md)
+# auth.md
+
+WorldMonitor agent authentication metadata and registration instructions.
 
 How agents authenticate with the WorldMonitor API and MCP server
 (`https://worldmonitor.app/mcp`), per the WorkOS **auth.md** spec:
@@ -28,9 +30,14 @@ chain:
        "skill": "https://worldmonitor.app/auth.md",
        "register_uri": "https://worldmonitor.app/oauth/register",
        "claim_uri": "https://worldmonitor.app/oauth/authorize",
+       "revocation_uri": "https://worldmonitor.app/developers",
        "identity_types_supported": ["anonymous"],
-       "anonymous": { "credential_types_supported": ["access_token"],
-                      "claim_uri": "https://worldmonitor.app/oauth/authorize" } } }
+       "credential_types_supported": ["access_token"],
+       "anonymous": {
+         "credential_types_supported": ["access_token"],
+         "claim_uri": "https://worldmonitor.app/oauth/authorize",
+         "revocation_uri": "https://worldmonitor.app/developers"
+       } } }
    ```
 
    Metadata is per-host: `issuer` and endpoints match the origin you fetched
@@ -69,9 +76,9 @@ POST /oauth/register  {"client_name":"My Agent","redirect_uris":["https://claude
 
 ## Claim
 
-Anonymous agents are claimed **at authorization time**, not via a separate
-endpoint — so `agent_auth.claim_uri` is the authorization endpoint itself. Start
-the authorization-code flow with a PKCE challenge:
+Anonymous agents are claimed **at authorization time**, using the `claim_uri`
+advertised in `agent_auth`, not via a separate `/agent/identity/claim` endpoint.
+Start the authorization-code flow with a PKCE challenge:
 
 ```
 GET /oauth/authorize?response_type=code&client_id=…&code_challenge=…&code_challenge_method=S256&scope=mcp
@@ -109,8 +116,8 @@ The same credentials authorize the REST API. Catalog:
 - **Expiry** — access tokens last 1 hour, refresh tokens 7 days; let them lapse
   to de-authorize an agent.
 - **User revoke** — a signed-in user revokes an agent from the dashboard
-  (<https://worldmonitor.app/developers>); the token is then rejected with `401`
-  / `invalid_grant`.
+  (`revocation_uri`: <https://worldmonitor.app/developers>); the token is then
+  rejected with `401` / `invalid_grant`.
 - **Refresh rotation** — refresh tokens rotate on every use with token-family
   revocation, so a stolen token dies once the real client next refreshes.
 

@@ -1378,7 +1378,10 @@ describe('agent readiness: MCP/OAuth origin alignment', () => {
       assert.ok(json.agent_auth, `agent_auth block present for ${host}`);
       assert.equal(json.agent_auth.skill, `https://${host}/auth.md`, `skill round-trips to /auth.md for ${host}`);
       assert.equal(json.agent_auth.register_uri, `https://${host}/oauth/register`);
+      assert.equal(json.agent_auth.claim_uri, `https://${host}/oauth/authorize`);
+      assert.equal(json.agent_auth.revocation_uri, `https://${host}/developers`);
       assert.deepEqual(json.agent_auth.identity_types_supported, ['anonymous']);
+      assert.deepEqual(json.agent_auth.credential_types_supported, ['access_token']);
       // Only `access_token` — an api_key is user-minted (carries a user
       // identity), so it is not an anonymous-registration credential.
       assert.deepEqual(
@@ -1401,6 +1404,7 @@ describe('agent readiness: MCP/OAuth origin alignment', () => {
         `https://${host}/oauth/authorize`,
         `anonymous method advertises claim_uri for ${host}`
       );
+      assert.equal(json.agent_auth.anonymous.revocation_uri, `https://${host}/developers`);
     }
   });
 
@@ -1426,6 +1430,8 @@ describe('agent readiness: MCP/OAuth origin alignment', () => {
       assert.equal(asJson.agent_auth.register_uri, 'https://worldmonitor.app/oauth/register');
       assert.equal(asJson.agent_auth.claim_uri, 'https://worldmonitor.app/oauth/authorize', `AS claim_uri must not carry spoofed host ${host}`);
       assert.equal(asJson.agent_auth.anonymous.claim_uri, 'https://worldmonitor.app/oauth/authorize');
+      assert.equal(asJson.agent_auth.revocation_uri, 'https://worldmonitor.app/developers');
+      assert.equal(asJson.agent_auth.anonymous.revocation_uri, 'https://worldmonitor.app/developers');
     }
 
     // Legit subdomain still self-describes.
@@ -1468,6 +1474,7 @@ describe('agent readiness: auth.md walkthrough', () => {
   const authMd = readFileSync(resolve(__dirname, '../public/auth.md'), 'utf-8');
 
   it('publishes /auth.md with the WorkOS-prescribed sections', () => {
+    assert.match(authMd, /^#\s+auth\.md\s*$/m, 'auth.md must have an H1 containing auth.md');
     for (const heading of ['Discover', 'Pick a method', 'Register', 'Claim', 'Use the credential', 'Errors', 'Revocation']) {
       assert.match(
         authMd,
@@ -1479,7 +1486,7 @@ describe('agent readiness: auth.md walkthrough', () => {
 
   it('references the auth.md spec and carries the spec anchor keywords', () => {
     assert.ok(authMd.includes('https://workos.com/auth-md'), 'auth.md must reference the WorkOS spec');
-    for (const keyword of ['agent_auth', 'register_uri', 'claim_uri', 'identity_assertion', 'id-jag', 'WWW-Authenticate']) {
+    for (const keyword of ['agent_auth', 'register_uri', 'claim_uri', 'revocation_uri', 'credential_types_supported', 'identity_assertion', 'id-jag', 'WWW-Authenticate']) {
       assert.ok(authMd.includes(keyword), `auth.md must mention spec keyword: ${keyword}`);
     }
   });

@@ -41,7 +41,7 @@
  * spoofed Host cannot be reflected into `issuer`/`token_endpoint`.
  */
 
-import { guardMetadataMethod, resolveMetadataOrigin } from './_agent-metadata';
+import { guardMetadataMethod, resolveMetadataOrigin } from './_agent-metadata.ts';
 
 export const config = { runtime: 'edge' };
 
@@ -65,10 +65,13 @@ export default function handler(req: Request): Response {
       skill: `${origin}/auth.md`,
       register_uri: `${origin}/oauth/register`,
       claim_uri: `${origin}/oauth/authorize`,
+      revocation_uri: `${origin}/developers`,
       identity_types_supported: ['anonymous'],
+      credential_types_supported: ['access_token'],
       anonymous: {
         credential_types_supported: ['access_token'],
         claim_uri: `${origin}/oauth/authorize`,
+        revocation_uri: `${origin}/developers`,
       },
     },
   });
