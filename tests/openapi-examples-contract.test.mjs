@@ -374,10 +374,15 @@ describe('OpenAPI examples contract', () => {
   });
 
   it('the examples injector reports the specs as in-sync (idempotent)', () => {
-    execFileSync('node', [resolve(root, 'scripts/openapi-inject-examples.mjs'), '--check'], {
-      cwd: root,
-      stdio: 'pipe',
-    });
+    try {
+      execFileSync('node', [resolve(root, 'scripts/openapi-inject-examples.mjs'), '--check'], {
+        cwd: root,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const detail = err.stderr?.toString().trim() || err.stdout?.toString().trim() || '';
+      throw new Error(`openapi-inject-examples --check failed:\n${detail}`);
+    }
   });
 });
 

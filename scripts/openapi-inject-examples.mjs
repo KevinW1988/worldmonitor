@@ -233,7 +233,6 @@ function stringExample(name, schema = {}, context = {}) {
   if (key.includes('category')) return constrainedString('cs.AI', schema);
   if (key.includes('feedtype')) return constrainedString('top', schema);
   if (key.includes('period')) return constrainedString('daily', schema);
-  if (key.includes('hs2')) return constrainedString('27', schema);
   if (key.includes('cargotype')) return constrainedString('container', schema);
   if (key.includes('commoditytype')) return constrainedString('oil', schema);
   if (key.includes('facilitytype')) return constrainedString('ugs', schema);
