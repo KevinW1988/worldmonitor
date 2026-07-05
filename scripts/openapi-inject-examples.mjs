@@ -138,6 +138,15 @@ function overrideStringExample(key, context = {}) {
   if (key.includes('chokepointid')) return CHOKEPOINT_EXAMPLE_ID;
   if (key.includes('scenarioid')) return SCENARIO_EXAMPLE_ID;
   if (key.includes('icao24')) return ICAO24_EXAMPLE;
+  // BatchOperation.path: the heuristic emits the literal 'example', which the
+  // execute-batch handler rejects (paths must match a documented GET RPC).
+  // Pin a parameterless GET so the published sample is runnable verbatim.
+  if (key === 'path') {
+    const where = `${context.operationId ?? ''} ${context.path ?? ''}`.toLowerCase();
+    if (where.includes('executebatch') || where.includes('batch/v1/execute')) {
+      return '/api/market/v1/get-fear-greed-index';
+    }
+  }
   if (key === 'type') {
     const where = `${context.operationId ?? ''} ${context.path ?? ''}`.toLowerCase();
     if (where.includes('baseline')) return BASELINE_TYPE_EXAMPLE_ID;

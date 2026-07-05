@@ -391,6 +391,10 @@
               {
                 "group": "Giving",
                 "openapi": "api/GivingService.openapi.yaml"
+              },
+              {
+                "group": "Batch",
+                "openapi": "api/BatchService.openapi.yaml"
               }
             ]
           }

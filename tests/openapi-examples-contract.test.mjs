@@ -360,12 +360,12 @@ function honeypotRequestViolations(spec, label) {
 describe('OpenAPI examples contract', () => {
   // Bump these exact surface counts when adding or removing proto services/RPCs.
   it('audits the known service operation surface', () => {
-    assert.equal(serviceSpecs.length, 34, `expected 34 service specs, found ${serviceSpecs.length}`);
+    assert.equal(serviceSpecs.length, 35, `expected 35 service specs, found ${serviceSpecs.length}`);
     const total = serviceSpecs.reduce((sum, file) => {
       const spec = JSON.parse(readFileSync(resolve(apiDir, file), 'utf8'));
       return sum + operationEntries(spec).length;
     }, 0);
-    assert.equal(total, 192, `expected 192 OpenAPI operations, found ${total}`);
+    assert.equal(total, 193, `expected 193 OpenAPI operations, found ${total}`);
   });
 
   it('adds schema-valid request and response examples to every service JSON spec', () => {
@@ -377,9 +377,9 @@ describe('OpenAPI examples contract', () => {
       totals.requestExpected += result.requestExpected;
       totals.responseExpected += result.responseExpected;
     }
-    assert.equal(totals.operations, 192);
+    assert.equal(totals.operations, 193);
     assert.ok(totals.requestExpected >= 137, `expected at least 137 request example targets, found ${totals.requestExpected}`);
-    assert.equal(totals.responseExpected, 192);
+    assert.equal(totals.responseExpected, 193);
   });
 
   // record-baseline-snapshot's nested updates[].type is a bare string (no schema
@@ -418,14 +418,14 @@ describe('OpenAPI examples contract', () => {
       const spec = loadYaml(readFileSync(resolve(apiDir, yamlFile), 'utf8'));
       operations += assertOperationExamples(spec, yamlFile).operations;
     }
-    assert.equal(operations, 192);
+    assert.equal(operations, 193);
   });
 
   it('adds request and response examples to the unified OpenAPI bundle', () => {
     const bundle = loadYaml(readFileSync(resolve(apiDir, 'worldmonitor.openapi.yaml'), 'utf8'));
     const result = assertOperationExamples(bundle, 'worldmonitor.openapi.yaml');
-    assert.equal(result.operations, 192);
-    assert.equal(result.responseExpected, 192);
+    assert.equal(result.operations, 193);
+    assert.equal(result.responseExpected, 193);
   });
 
   // A honeypot field (hidden anti-bot input) is silently discarded by the
