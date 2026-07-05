@@ -71,7 +71,7 @@
           },
           {
             name: 'getWorldMonitorMcpEndpoint',
-            description: "Return connection details for World Monitor's remote MCP server so an agent can pull live geopolitical, market, maritime, aviation, cyber and economic intelligence directly. Includes the Streamable HTTP endpoint, the discovery server card, supported auth modes, and docs.",
+            description: "Return connection details for World Monitor's remote MCP server so an agent can pull live geopolitical, market, maritime, aviation, cyber and economic intelligence directly. Includes the Streamable HTTP endpoint, the discovery server card, and supported auth modes.",
             inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             execute: function () {
               // No tool count here — the live server card is the source of truth
@@ -81,8 +81,7 @@
                 transport: 'streamableHttp',
                 serverCard: 'https://worldmonitor.app/.well-known/mcp/server-card.json',
                 auth: ['OAuth 2.1 bearer (Authorization: Bearer <token>)', 'API key (X-WorldMonitor-Key: wm_...)'],
-                publicDiscovery: 'initialize, tools/list and notifications/initialized are servable without credentials',
-                docs: 'https://worldmonitor.app/docs/mcp-overview'
+                publicDiscovery: 'initialize, tools/list and notifications/initialized are servable without credentials'
               }, null, 2)));
             }
           }
