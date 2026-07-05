@@ -35,7 +35,7 @@ describe('agent-mode view (/?mode=agent)', () => {
     assert.equal(view.endpoints.mcp.url, serverCard.url);
     assert.equal(view.endpoints.mcp.tools, serverCard.tools.length);
     assert.equal(view.endpoints.a2a.url, agentCard.url);
-    assert.equal(view.endpoints.nlweb.url, 'https://worldmonitor.app/ask');
+    assert.equal(view.endpoints.nlweb.url, 'https://www.worldmonitor.app/ask');
   });
 
   it('vercel.json serves it for /?mode=agent ahead of the welcome rewrite', () => {
