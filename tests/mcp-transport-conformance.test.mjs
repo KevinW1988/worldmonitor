@@ -509,6 +509,13 @@ describe('api/mcp.ts — /.well-known/mcp dual-role alias', () => {
     assert.equal(card.kind, 'product');
     assert.equal(card.serverUrl, 'https://worldmonitor.app/mcp');
     assert.equal(card.remotes?.[0]?.url, 'https://worldmonitor.app/mcp');
+    // The manifest is a static, immutable-per-deploy asset — it must stay
+    // cacheable (it was `public, max-age=3600` as a static file). The MCP
+    // no-store CORS bundle must NOT clobber that on the manifest GET, or every
+    // discovery fetch (orank + every MCP client) re-hits the function.
+    assert.match(res.headers.get('cache-control') ?? '', /max-age=3600/,
+      'server card GET must be cacheable, not the endpoint no-store');
+    assert.doesNotMatch(res.headers.get('cache-control') ?? '', /no-store/);
   });
 
   it('serves the card at the /.well-known/mcp.json alias too', async () => {

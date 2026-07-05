@@ -315,10 +315,16 @@ async function serveServerCard(req: Request, corsHeaders: Record<string, string>
   }
   return new Response(serverCardCache, {
     status: 200,
+    // Cache-Control comes AFTER the ...corsHeaders spread: getMcpCorsHeaders()
+    // carries MCP_CACHE_CONTROL (`no-store`) for the live JSON-RPC/SSE endpoint,
+    // but the manifest is a static, immutable-per-deploy asset that must stay
+    // cacheable (it was `public, max-age=3600` as a static file). Spreading last
+    // would clobber that back to no-store and re-hit the function on every
+    // discovery fetch.
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'public, max-age=3600',
       ...corsHeaders,
+      'Cache-Control': 'public, max-age=3600',
     },
   });
 }
