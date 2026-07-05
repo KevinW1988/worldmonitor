@@ -14446,6 +14446,27 @@ function createForecastLlmHttpError(resp, usableBudgetMs = Infinity) {
   return err;
 }
 
+// Seeder-side llm_call telemetry (#4895, post-#4901 review P1). Mirrors
+// server/_shared/usage.ts LlmCallEvent field-for-field and shares its gating
+// (USAGE_TELEMETRY=1 + AXIOM_API_TOKEN) so seeder events unify with the
+// Vercel-side stream in one APL query. Best-effort: one bounded POST per
+// logical call, never throws, never delays the seed meaningfully.
+const AXIOM_WM_API_USAGE_INGEST_URL = 'https://api.axiom.co/v1/datasets/wm_api_usage/ingest';
+
+async function emitForecastLlmEvents(events) {
+  if (process.env.USAGE_TELEMETRY !== '1' || events.length === 0) return;
+  const token = process.env.AXIOM_API_TOKEN;
+  if (!token) return;
+  try {
+    await fetch(AXIOM_WM_API_USAGE_INGEST_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(events),
+      signal: AbortSignal.timeout(1_500),
+    });
+  } catch { /* telemetry must never affect the seed */ }
+}
+
 async function callForecastLLM(systemPrompt, userPrompt, options = {}) {
   if (forecastLlmCallOverrideForTests) {
     return await forecastLlmCallOverrideForTests(systemPrompt, userPrompt, options);
@@ -14459,63 +14480,121 @@ async function callForecastLLM(systemPrompt, userPrompt, options = {}) {
     : providers.map(provider => provider.name).join(',');
   console.log(`  [LLM:${stage}] providerOrder=${requestedOrder} modelOverrides=${JSON.stringify(options.modelOverrides || {})}`);
 
-  for (const provider of providers) {
-    const apiKey = process.env[provider.envKey];
-    if (!apiKey) continue;
-    try {
-      const forecastFetch = forecastLlmFetchForTests || ((...args) => globalThis.fetch(...args));
-      const retryDelayMs = Number.isFinite(options.retryDelayMs)
-        ? Math.max(0, Math.floor(options.retryDelayMs))
-        : FORECAST_LLM_RETRY_BASE_MS;
-      const resp = await withRetry(async () => {
-        const usableBudgetMs = getUsableForecastLlmBudgetMs(budgetStartedAtMs, stageBudgetMs);
-        if (usableBudgetMs <= 0) throw createForecastLlmBudgetError(stage, budgetStartedAtMs, stageBudgetMs);
-        const response = await forecastFetch(provider.apiUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'User-Agent': CHROME_UA,
-            ...(provider.name === 'openrouter' ? { 'HTTP-Referer': 'https://worldmonitor.app', 'X-Title': 'World Monitor' } : {}),
-          },
-          body: JSON.stringify({
-            model: provider.model,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            max_tokens: options.maxTokens || 1500,
-            temperature: options.temperature ?? 0.3,
-          }),
-          signal: AbortSignal.timeout(Math.max(1, Math.min(provider.timeout, usableBudgetMs))),
-        });
-        if (!response.ok) {
-          throw createForecastLlmHttpError(
-            response,
-            getUsableForecastLlmBudgetMs(budgetStartedAtMs, stageBudgetMs),
-          );
-        }
-        return response;
-      }, FORECAST_LLM_PROVIDER_MAX_RETRIES, retryDelayMs);
+  // One event per ATTEMPT: every withRetry retry and every provider fallback
+  // re-sends the full prompt, so each gets its own fallback_index. Budget
+  // pre-emptions (thrown before the fetch) are not attempts and emit nothing.
+  const llmPromptChars = (systemPrompt?.length ?? 0) + (userPrompt?.length ?? 0);
+  const llmMaxTokens = options.maxTokens || 1500;
+  const llmEvents = [];
+  let llmAttemptIndex = 0;
+  const recordLlmAttempt = (providerName, model, ok, startedAtMs, extra = {}) => {
+    llmEvents.push({
+      _time: new Date().toISOString(),
+      event_type: 'llm_call',
+      provider: providerName,
+      model,
+      stage,
+      ok,
+      duration_ms: Date.now() - startedAtMs,
+      tokens_total: extra.tokensTotal ?? 0,
+      tokens_prompt: extra.tokensPrompt ?? 0,
+      tokens_completion: extra.tokensCompletion ?? 0,
+      prompt_chars: llmPromptChars,
+      max_tokens: llmMaxTokens,
+      fallback_index: llmAttemptIndex++,
+      reason: extra.reason || '',
+    });
+  };
 
-      let json;
+  try {
+    for (const provider of providers) {
+      const apiKey = process.env[provider.envKey];
+      if (!apiKey) continue;
+      let attemptT0 = Date.now();
       try {
-        json = await resp.json();
+        const forecastFetch = forecastLlmFetchForTests || ((...args) => globalThis.fetch(...args));
+        const retryDelayMs = Number.isFinite(options.retryDelayMs)
+          ? Math.max(0, Math.floor(options.retryDelayMs))
+          : FORECAST_LLM_RETRY_BASE_MS;
+        const resp = await withRetry(async () => {
+          const usableBudgetMs = getUsableForecastLlmBudgetMs(budgetStartedAtMs, stageBudgetMs);
+          if (usableBudgetMs <= 0) throw createForecastLlmBudgetError(stage, budgetStartedAtMs, stageBudgetMs);
+          attemptT0 = Date.now();
+          try {
+            const response = await forecastFetch(provider.apiUrl, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                'User-Agent': CHROME_UA,
+                ...(provider.name === 'openrouter' ? { 'HTTP-Referer': 'https://worldmonitor.app', 'X-Title': 'World Monitor' } : {}),
+              },
+              body: JSON.stringify({
+                model: provider.model,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt },
+                ],
+                max_tokens: options.maxTokens || 1500,
+                temperature: options.temperature ?? 0.3,
+              }),
+              signal: AbortSignal.timeout(Math.max(1, Math.min(provider.timeout, usableBudgetMs))),
+            });
+            if (!response.ok) {
+              recordLlmAttempt(provider.name, provider.model, false, attemptT0, { reason: `http_${response.status}` });
+              const httpErr = createForecastLlmHttpError(
+                response,
+                getUsableForecastLlmBudgetMs(budgetStartedAtMs, stageBudgetMs),
+              );
+              httpErr.__llmAttemptRecorded = true;
+              throw httpErr;
+            }
+            return response;
+          } catch (err) {
+            if (!err?.__llmAttemptRecorded && !isForecastLlmBudgetError(err)) {
+              err.__llmAttemptRecorded = true;
+              const name = err?.name;
+              recordLlmAttempt(provider.name, provider.model, false, attemptT0, {
+                reason: name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'fetch_error',
+              });
+            }
+            throw err;
+          }
+        }, FORECAST_LLM_PROVIDER_MAX_RETRIES, retryDelayMs);
+
+        let json;
+        try {
+          json = await resp.json();
+        } catch (err) {
+          console.warn(`  [LLM:${stage}] ${provider.name} invalid response: ${err.message}`);
+          recordLlmAttempt(provider.name, provider.model, false, attemptT0, { reason: 'invalid_json' });
+          continue;
+        }
+        const tokensExtra = {
+          tokensTotal: json.usage?.total_tokens ?? 0,
+          tokensPrompt: json.usage?.prompt_tokens ?? 0,
+          tokensCompletion: json.usage?.completion_tokens ?? 0,
+        };
+        const text = json.choices?.[0]?.message?.content?.trim();
+        if (!text || text.length < 20) {
+          recordLlmAttempt(provider.name, provider.model, false, attemptT0, { ...tokensExtra, reason: 'empty' });
+          continue;
+        }
+        const model = json.model || provider.model;
+        console.log(`  [LLM:${stage}] ${provider.name} success model=${model}`);
+        recordLlmAttempt(provider.name, model, true, attemptT0, tokensExtra);
+        return { text, model, provider: provider.name };
       } catch (err) {
-        console.warn(`  [LLM:${stage}] ${provider.name} invalid response: ${err.message}`);
-        continue;
+        // All real attempts were recorded inside the retry callback; budget
+        // pre-emptions never sent the prompt, so nothing to record here.
+        console.warn(`  [LLM:${stage}] ${provider.name} ${err.message}`);
+        if (isForecastLlmBudgetError(err)) return null;
       }
-      const text = json.choices?.[0]?.message?.content?.trim();
-      if (!text || text.length < 20) continue;
-      const model = json.model || provider.model;
-      console.log(`  [LLM:${stage}] ${provider.name} success model=${model}`);
-      return { text, model, provider: provider.name };
-    } catch (err) {
-      console.warn(`  [LLM:${stage}] ${provider.name} ${err.message}`);
-      if (isForecastLlmBudgetError(err)) return null;
     }
+    return null;
+  } finally {
+    await emitForecastLlmEvents(llmEvents);
   }
-  return null;
 }
 
 async function redisSet(url, token, key, data, ttlSeconds) {
@@ -17740,6 +17819,7 @@ export {
   __redisSetForTests,
   __setForecastLlmCallOverrideForTests,
   __setForecastLlmTransportForTests,
+  callForecastLLM,
   __setForecastLlmRunDeadlineForTests,
   __setRedisStoreForTests,
   buildMarketImplicationsFingerprint,
