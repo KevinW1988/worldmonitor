@@ -16169,6 +16169,24 @@ function validateMarketImplications(cards, allowedTickers = ALL_ALLOWED_TICKERS)
 
 const MARKET_IMPLICATIONS_META_KEY = 'seed-meta:intelligence:market-implications';
 const MARKET_IMPLICATIONS_META_TTL = 86400 * 7;
+const MARKET_IMPLICATIONS_STAGE_CACHE_PREFIX = 'forecast:llm-market-implications:';
+
+// Input-hash guard for the market_implications LLM stage (#4894). This was
+// the only forecast stage with no pre-call cache — a 2,500-token completion
+// regenerated every hourly run (plus every triggered re-run) even when the
+// world state hadn't moved. Numbers are quantized to ONE significant digit
+// before hashing: routine price ticks don't defeat the guard, while a
+// bucket-flipping move OR any text change (new signal, sector leadership,
+// theater alert) still regenerates. Percent-change fields — the semantically
+// load-bearing numbers — live in the 0.1–10 range where one significant
+// digit still separates 0.3% from 0.9% from 8%.
+function buildMarketImplicationsFingerprint(context) {
+  const quantized = String(context ?? '').replace(/-?\d+(?:\.\d+)?/g, (match) => {
+    const n = Number(match);
+    return Number.isFinite(n) && n !== 0 ? Number(n).toPrecision(1) : '0';
+  });
+  return crypto.createHash('sha256').update(quantized).digest('hex').slice(0, 16);
+}
 
 function marketImplicationsMetaErrorReason(reason) {
   return String(reason || 'unknown').replace(/\s+/g, ' ').slice(0, 240);
@@ -16204,6 +16222,26 @@ async function buildAndSeedMarketImplications(inputs) {
   const startMs = Date.now();
   console.log('  [MarketImplications] Building world-state context...');
   const context = buildMarketImplicationsContext(inputs);
+
+  const { url, token } = getRedisCredentials();
+
+  // Input-hash guard: unchanged world state → republish the cached cards
+  // (keeps the canonical key + seed-meta fresh) and skip the LLM entirely.
+  const fingerprint = buildMarketImplicationsFingerprint(context);
+  const stageCacheKey = `${MARKET_IMPLICATIONS_STAGE_CACHE_PREFIX}${fingerprint}`;
+  try {
+    const cachedStage = await redisGet(url, token, stageCacheKey);
+    if (Array.isArray(cachedStage?.cards) && cachedStage.cards.length > 0) {
+      const payload = { cards: cachedStage.cards, generatedAt: new Date().toISOString(), model: cachedStage.model || '' };
+      await redisSet(url, token, MARKET_IMPLICATIONS_KEY, payload, MARKET_IMPLICATIONS_TTL);
+      const meta = { fetchedAt: Date.now(), recordCount: cachedStage.cards.length, status: 'ok' };
+      await redisSet(url, token, MARKET_IMPLICATIONS_META_KEY, meta, MARKET_IMPLICATIONS_META_TTL);
+      console.log(JSON.stringify({ event: 'llm_market_implications', cached: true, hash: fingerprint, count: cachedStage.cards.length }));
+      console.log(`  [MarketImplications] Republished ${cachedStage.cards.length} cached cards (inputs unchanged, ${Math.round(Date.now() - startMs)}ms)`);
+      return;
+    }
+  } catch { /* guard is best-effort — fall through to live generation */ }
+
   const userPrompt = `World state as of ${new Date().toISOString()}:\n\n${context}\n\nAllowed tickers: ${[...ALL_ALLOWED_TICKERS].join(', ')}`;
 
   const llmOptions = getForecastLlmCallOptions('market_implications');
@@ -16228,8 +16266,6 @@ async function buildAndSeedMarketImplications(inputs) {
     await writeMarketImplicationsFailureMeta('no_parseable_cards');
     return;
   }
-
-  const { url, token } = getRedisCredentials();
 
   // Extend the curated static allowlist with tradeable equity symbols from Redis.
   // ALL_ALLOWED_TICKERS is always preserved (ETFs, defense, commodities, forex, rates, crypto).
@@ -16265,6 +16301,10 @@ async function buildAndSeedMarketImplications(inputs) {
 
   const meta = { fetchedAt: Date.now(), recordCount: cards.length, status: 'ok' };
   await redisSet(url, token, MARKET_IMPLICATIONS_META_KEY, meta, MARKET_IMPLICATIONS_META_TTL);
+
+  // Only validated live generations feed the input-hash guard; failures above
+  // returned early so a bad run can never pin bad cards for the TTL.
+  await redisSet(url, token, stageCacheKey, { cards, model: result.model || '' }, MARKET_IMPLICATIONS_TTL);
 
   const durationMs = Date.now() - startMs;
   console.log(`  [MarketImplications] Published ${cards.length} cards to ${MARKET_IMPLICATIONS_KEY} (${Math.round(durationMs)}ms, model=${result.model || 'unknown'})`);
@@ -17702,4 +17742,6 @@ export {
   __setForecastLlmTransportForTests,
   __setForecastLlmRunDeadlineForTests,
   __setRedisStoreForTests,
+  buildMarketImplicationsFingerprint,
+  buildAndSeedMarketImplications,
 };
