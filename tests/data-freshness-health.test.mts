@@ -378,8 +378,8 @@ describe('health freshness ingestion', () => {
     );
     assert.match(
       appSrc,
-      /scheduleRefresh\(\s*['"]health-freshness['"][\s\S]*refreshDataFreshnessFromHealth\(\)[\s\S]*REFRESH_INTERVALS\.healthFreshness[\s\S]*runImmediately:\s*true/,
-      'App scheduler should poll /api/health freshness immediately and on an interval, independent of panel visibility',
+      /scheduleAfterFirstPaint\(\(\)\s*=>\s*\{[\s\S]*?scheduleRefresh\(\s*['"]health-freshness['"][\s\S]*?refreshDataFreshnessFromHealth\(\)[\s\S]*?REFRESH_INTERVALS\.healthFreshness[\s\S]*?runImmediately:\s*true/,
+      'App scheduler should hydrate health freshness at post-paint idle (never in the LCP window — #4907) and then on an interval, independent of panel visibility',
     );
   });
 });

@@ -1012,9 +1012,26 @@ export default async function handler(req, ctx) {
     if (Object.keys(problems).length > 0) body.problems = problems;
   }
 
+  // Compact is the public keyless form polled by every dashboard tab (#4907):
+  // a short shared cache collapses per-tab polling onto ~one 196-key Redis
+  // pipeline per cache window per edge region. Browsers stay revalidate-always
+  // so a recovering tab sees fresh state within one poll. Everything else —
+  // the key-gated detailed response, the 401, the REDIS_DOWN 503 — keeps the
+  // no-store defaults from `headers` (caching a 401 would pin an auth failure;
+  // caching a 503 would mask recovery from HTTP monitors).
+  let responseHeaders = headers;
+  if (compact) {
+    const { 'CF-Cache-Status': _bypassMarker, ...cacheable } = headers;
+    responseHeaders = {
+      ...cacheable,
+      'Cache-Control': 'public, max-age=0, must-revalidate',
+      'CDN-Cache-Control': 'public, s-maxage=60',
+    };
+  }
+
   return new Response(JSON.stringify(body, null, compact ? 0 : 2), {
     status: httpStatus,
-    headers,
+    headers: responseHeaders,
   });
 }
 
