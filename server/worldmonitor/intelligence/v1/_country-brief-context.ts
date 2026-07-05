@@ -114,21 +114,53 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Case-insensitive word-boundary match — for display NAMES only. */
 export function includesCountryTerm(text: string, term: string): boolean {
   const normalizedTerm = term.trim().toLowerCase();
   if (!normalizedTerm) return false;
   return new RegExp(`(^|[^a-z0-9])${escapeRegExp(normalizedTerm)}(?=$|[^a-z0-9])`, 'i').test(text);
 }
 
-export function countryBriefSearchTerms(countryCode: string): string[] {
-  const terms = [countryCode.toLowerCase()];
+/**
+ * ISO codes match ONLY as uppercase tokens in the raw (non-lowercased) text.
+ * Codes like IN, US, AT, NO collide with common English words — a
+ * case-insensitive match swept "rally in Europe" into India's shared brief
+ * (post-#4898 review, P2). Real code mentions in headlines are uppercase
+ * ("US announces…", "exports from IN"); anything else is prose.
+ */
+export function includesCountryCodeToken(text: string, code: string): boolean {
+  const normalized = code.trim().toUpperCase();
+  if (!normalized) return false;
+  return new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(normalized)}(?=$|[^A-Za-z0-9])`).test(text);
+}
+
+export interface CountryMatchTerms {
+  code: string;
+  names: string[];
+}
+
+export function countryBriefSearchTerms(countryCode: string): CountryMatchTerms {
+  const code = countryCode.trim().toUpperCase();
+  const names: string[] = [];
   try {
-    const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(countryCode);
-    if (name) terms.push(name.toLowerCase());
+    const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
+    // Unknown regions come back as a code echo or the ICU "Unknown Region"
+    // sentinel — neither is a real name, and an echoed code as a lowercase
+    // word-match term would reintroduce the stopword collision this split
+    // exists to prevent.
+    if (name && name.toUpperCase() !== code && name.toLowerCase() !== 'unknown region') {
+      names.push(name.toLowerCase());
+    }
   } catch {
     /* Intl.DisplayNames can be missing in constrained runtimes. */
   }
-  return [...new Set(terms.filter(Boolean))];
+  return { code, names };
+}
+
+/** Display name is the primary signal; the ISO code counts only as an uppercase token. */
+export function matchesCountry(rawText: string, terms: CountryMatchTerms): boolean {
+  if (terms.names.some((name) => includesCountryTerm(rawText, name))) return true;
+  return includesCountryCodeToken(rawText, terms.code);
 }
 
 function collectBriefSources(items: DigestItemForBrief[], maxSources = MAX_SOURCES): SharedBriefSource[] {
@@ -161,9 +193,11 @@ export function buildSharedCountryContext(digest: unknown, countryCode: string):
   if (allItems.length === 0) return EMPTY_CONTEXT;
 
   const terms = countryBriefSearchTerms(countryCode);
+  // Raw text, NOT lowercased — the uppercase-token code match depends on the
+  // original casing surviving to this point.
   const countryItems = allItems.filter((item) => {
-    const text = `${typeof item.title === 'string' ? item.title : ''} ${typeof item.snippet === 'string' ? item.snippet : ''}`.toLowerCase();
-    return terms.some((term) => includesCountryTerm(text, term));
+    const text = `${typeof item.title === 'string' ? item.title : ''} ${typeof item.snippet === 'string' ? item.snippet : ''}`;
+    return matchesCountry(text, terms);
   });
 
   // No country match → ground on the top global items instead. A generic

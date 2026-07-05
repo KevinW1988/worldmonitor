@@ -6,6 +6,8 @@ import {
   buildSharedCountryContext,
   countryBriefSearchTerms,
   includesCountryTerm,
+  includesCountryCodeToken,
+  matchesCountry,
 } from '../server/worldmonitor/intelligence/v1/_country-brief-context.ts';
 
 describe('country intel brief cache key derivation', () => {
@@ -105,15 +107,54 @@ describe('shared country context from the news digest', () => {
 });
 
 describe('country term matching', () => {
-  it('derives code + display-name terms', () => {
-    const terms = countryBriefSearchTerms('FR');
-    assert.ok(terms.includes('fr'));
-    assert.ok(terms.includes('france'));
+  it('derives an uppercase code + lowercase display names', () => {
+    const terms = countryBriefSearchTerms('fr');
+    assert.equal(terms.code, 'FR');
+    assert.deepEqual(terms.names, ['france']);
   });
 
-  it('matches on word boundaries only', () => {
-    assert.equal(includesCountryTerm('france announces plan', 'france'), true);
-    assert.equal(includesCountryTerm('shipment from rotterdam', 'fr'), false, '"fr" inside "from" must not match');
-    assert.equal(includesCountryTerm('deal with fr counterpart', 'fr'), true);
+  it('does not treat the Intl code echo for unknown regions as a name', () => {
+    const terms = countryBriefSearchTerms('ZZ');
+    assert.equal(terms.code, 'ZZ');
+    assert.deepEqual(terms.names, [], 'an echoed code must not become a lowercase word-match term');
+  });
+
+  it('matches display names on word boundaries, case-insensitively', () => {
+    assert.equal(includesCountryTerm('France announces plan', 'france'), true);
+    assert.equal(includesCountryTerm('shipment from Indiana port', 'india'), false, '"india" inside "Indiana" must not match');
+  });
+
+  it('matches ISO codes only as uppercase tokens in the raw text', () => {
+    assert.equal(includesCountryCodeToken('Exports from IN surge on new deal', 'IN'), true);
+    assert.equal(includesCountryCodeToken('Prices rise in Europe as inflation cools', 'IN'), false, 'lowercase "in" must not match the IN code');
+    assert.equal(includesCountryCodeToken('US announces sanctions package', 'US'), true);
+    assert.equal(includesCountryCodeToken('tell us more about the plan', 'US'), false);
+    assert.equal(includesCountryCodeToken('INDIA expands exports', 'IN'), false, 'code token must not match inside a longer uppercase word');
+  });
+
+  it('matchesCountry rejects the stopword-collision codes that over-matched shared briefs', () => {
+    const cases = [
+      { cc: 'IN', hit: 'India launches lunar mission', miss: 'Markets rally in Europe' },
+      { cc: 'US', hit: 'United States imposes tariffs', miss: 'tell us what happened next' },
+      { cc: 'NO', hit: 'Norway boosts energy exports', miss: 'no deal reached in talks' },
+      { cc: 'AT', hit: 'Austria tightens border rules', miss: 'explosion at refinery injures three' },
+    ];
+    for (const { cc, hit, miss } of cases) {
+      const terms = countryBriefSearchTerms(cc);
+      assert.equal(matchesCountry(hit, terms), true, `${cc} should match "${hit}"`);
+      assert.equal(matchesCountry(miss, terms), false, `${cc} must NOT match "${miss}"`);
+    }
+  });
+
+  it('shared context no longer sweeps unrelated items into stopword-code briefs', () => {
+    const digest = {
+      items: [
+        { title: 'Markets rally in Europe on rate-cut hopes', source: 'Reuters', link: 'https://example.com/eu' },
+        { title: 'India launches lunar mission', source: 'AFP', link: 'https://example.com/india' },
+      ],
+    };
+    const { sources } = buildSharedCountryContext(digest, 'IN');
+    assert.equal(sources.length, 1, 'only the India item should ground the IN brief');
+    assert.equal(sources[0].url, 'https://example.com/india');
   });
 });
