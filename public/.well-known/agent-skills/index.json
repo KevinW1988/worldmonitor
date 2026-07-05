@@ -1,13 +1,27 @@
 {
   "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
-  "instructions": "World Monitor is a live, machine-readable global-intelligence API and MCP server. Reach for it when a task needs fresh, correlated, structured data about the state of the world — JSON to reason over, not prose to re-parse.\n\nWhen to use these skills:\n- Use `fetch-news-digest` when the user asks what’s in the news right now — the aggregated, categorized, threat-classified output of 500+ curated feeds in one call.\n- Use `fetch-country-brief` when the user asks for a strategic read on one country’s geopolitical, economic, or security situation (a source-attributed narrative brief).\n- Use `fetch-resilience-score` when the user asks how resilient a country is, or wants its composite 0–100 resilience score, 30-day trend, or per-domain/pillar breakdown.\n- Use `check-chokepoint-status` when the user asks whether a maritime chokepoint (Suez, Hormuz, Malacca…) is disrupted, congested, or safe right now.\n- Use `get-market-quotes` when the user asks for current equity/index/ETF prices or a quick market snapshot.\n- Use `track-conflict-events` when the user asks about recent fighting or attacks — geolocated UCDP events with parties and fatality bands.\n- Use `scan-cyber-threats` when the user asks about active malware IOCs, C2 infrastructure, or CISA known-exploited vulnerabilities.\n- Use `check-sanctions-pressure` when the user asks which countries/programs face OFAC sanctions pressure or what was recently designated (Pro-gated).\n\nBeyond these skills the MCP server exposes a broad catalog of tools — energy, climate, health, displacement, maritime and aviation activity, natural disasters, forecasts, and prediction markets. Use them together to check whether a live event (a conflict, sanction, or chokepoint disruption) has a plausible market or supply-chain transmission path.\n\nWhen NOT to use: World Monitor is not a general web-search engine, a historical archive, or a trading-execution venue — it places no orders and stores no user documents. For a one-off narrative that needs no correlation across live layers, a plain LLM is cheaper and faster.\n\nHow an agent should call it:\n- MCP server (recommended): https://worldmonitor.app/mcp — Streamable HTTP; issue `tools/list` for the live inventory.\n- REST API: base https://api.worldmonitor.app — OpenAPI spec at https://worldmonitor.app/openapi.yaml.\n- CLI (shell/scripts): the `worldmonitor` npm package wraps these tools — `npx worldmonitor tools` (public, no key) or `npm i -g worldmonitor`, then pass `--api-key` for data calls. https://www.npmjs.com/package/worldmonitor\n- Auth: OAuth2 (`scope=mcp`) or an API-key header `X-WorldMonitor-Key: wm_<40-hex>`. Issue a key at https://worldmonitor.app/pro.",
+  "instructions": "World Monitor is a live, machine-readable global-intelligence API and MCP server. Reach for it when a task needs fresh, correlated, structured data about the state of the world — JSON to reason over, not prose to re-parse.\n\nWhen to use these skills:\n- Use `fetch-news-digest` when the user asks what’s in the news right now — the aggregated, categorized, threat-classified output of 500+ curated feeds in one call.\n- Use `fetch-country-brief` when the user asks for a strategic read on one country’s geopolitical, economic, or security situation (a source-attributed narrative brief).\n- Use `fetch-resilience-score` when the user asks how resilient a country is, or wants its composite 0–100 resilience score, 30-day trend, or per-domain/pillar breakdown.\n- Use `check-chokepoint-status` when the user asks whether a maritime chokepoint (Suez, Hormuz, Malacca…) is disrupted, congested, or safe right now.\n- Use `get-market-quotes` when the user asks for current equity/index/ETF prices or a quick market snapshot.\n- Use `track-conflict-events` when the user asks about recent fighting or attacks — geolocated UCDP events with parties and fatality bands.\n- Use `scan-cyber-threats` when the user asks about active malware IOCs, C2 infrastructure, or CISA known-exploited vulnerabilities.\n- Use `check-sanctions-pressure` when the user asks which countries/programs face OFAC sanctions pressure or what was recently designated (Pro-gated).\n- Use `check-country-risk` when the user asks how risky or unstable a country is right now — CII stress score, advisory level, sanctions exposure.\n- Use `check-airport-delays` when the user asks whether an airport is delayed or disrupted, with quantified delay/cancellation impact.\n- Use `track-military-flights` when the user asks about military air activity in a region — tracked aircraft plus activity clusters.\n- Use `monitor-internet-outages` when the user asks whether a country’s internet is down, shut down, or throttled.\n- Use `track-earthquakes` when the user asks about recent seismic activity, including test-site proximity concern scoring.\n- Use `get-prediction-markets` when the user asks what the market odds are on a geopolitical, economic, or election outcome.\n- Use `track-tariff-trends` when the user asks how tariffs between two countries changed or what rate a sector faces (Pro-gated).\n- Use `track-vessel-traffic` when the user asks what ships are in an area or whether maritime traffic is disrupted (AIS snapshot).\n\nBeyond these skills the MCP server exposes a broad catalog of tools — energy, climate, health, displacement, natural disasters, and forecasts. Use them together to check whether a live event (a conflict, sanction, or chokepoint disruption) has a plausible market or supply-chain transmission path.\n\nWhen NOT to use: World Monitor is not a general web-search engine, a historical archive, or a trading-execution venue — it places no orders and stores no user documents. For a one-off narrative that needs no correlation across live layers, a plain LLM is cheaper and faster.\n\nHow an agent should call it:\n- MCP server (recommended): https://worldmonitor.app/mcp — Streamable HTTP; issue `tools/list` for the live inventory.\n- REST API: base https://api.worldmonitor.app — OpenAPI spec at https://worldmonitor.app/openapi.yaml.\n- CLI (shell/scripts): the `worldmonitor` npm package wraps these tools — `npx worldmonitor tools` (public, no key) or `npm i -g worldmonitor`, then pass `--api-key` for data calls. https://www.npmjs.com/package/worldmonitor\n- Auth: OAuth2 (`scope=mcp`) or an API-key header `X-WorldMonitor-Key: wm_<40-hex>`. Issue a key at https://worldmonitor.app/pro.",
   "skills": [
+    {
+      "name": "check-airport-delays",
+      "type": "skill-md",
+      "description": "Retrieve current airport delay and cancellation alerts worldwide — delay type, severity, average delay minutes, and affected-flight percentages per airport. Use when the user asks whether an airport is delayed, disrupted, or experiencing cancellations.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/check-airport-delays/SKILL.md",
+      "digest": "sha256:14f332b45766bdd91cd1da14f26bb0ddf7dc5e5b2e54a42e74be59c654df432a"
+    },
     {
       "name": "check-chokepoint-status",
       "type": "skill-md",
       "description": "Retrieve live disruption status for the 13 monitored maritime chokepoints (Suez, Hormuz, Malacca, Bab el-Mandeb, Panama, and more). Use when the user asks whether a strait or canal is disrupted, congested, or safe for shipping right now.",
       "url": "https://worldmonitor.app/.well-known/agent-skills/check-chokepoint-status/SKILL.md",
       "digest": "sha256:099f642eb5f78e13b4186b04434e7d00fb92201964978b30a7bc5c710bf3ad66"
+    },
+    {
+      "name": "check-country-risk",
+      "type": "skill-md",
+      "description": "Retrieve composite country risk intelligence — Country Instability Index (CII), travel advisory level, and active sanctions exposure — for one country by ISO code. Use when the user asks how risky or unstable a country is right now.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/check-country-risk/SKILL.md",
+      "digest": "sha256:57f48a0e3f93e394368ad50b4340cb1b0f2426b98f476822a5af61970753e83a"
     },
     {
       "name": "check-sanctions-pressure",
@@ -45,6 +59,20 @@
       "digest": "sha256:ae489fd798b38dfb708b7d04bca2b569958558a9dcd2bce0d2bba0c971347cd0"
     },
     {
+      "name": "get-prediction-markets",
+      "type": "skill-md",
+      "description": "Retrieve active prediction-market contracts (Polymarket) with live yes-price probabilities, volume, and close dates, filterable by category or keyword. Use when the user asks what the market odds are on a geopolitical, economic, or election outcome.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/get-prediction-markets/SKILL.md",
+      "digest": "sha256:24211e89b6d2dd431a8f535cf42cfd6cc24b7634b05f2088efc2caaab8a68ef0"
+    },
+    {
+      "name": "monitor-internet-outages",
+      "type": "skill-md",
+      "description": "Retrieve detected internet outages (Cloudflare Radar) with country, cause, severity, and time bounds. Use when the user asks whether a country's internet is down, throttled, or experiencing a shutdown.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/monitor-internet-outages/SKILL.md",
+      "digest": "sha256:5c9175fec49f5ec77c7e1bef00009beafa76e768ac2a69b18196d70787d5dd49"
+    },
+    {
       "name": "scan-cyber-threats",
       "type": "skill-md",
       "description": "Retrieve active cyber-threat intelligence — malware IOCs, C2 infrastructure, and CISA known-exploited vulnerabilities — filterable by type, source, and severity. Use when the user asks about current cyber threats, IOCs, or actively exploited CVEs.",
@@ -57,6 +85,34 @@
       "description": "Retrieve geolocated armed-conflict events (UCDP) with parties, fatality estimates, and violence type, filterable by country and date range. Use when the user asks about recent fighting, attacks, or conflict activity in a country or region.",
       "url": "https://worldmonitor.app/.well-known/agent-skills/track-conflict-events/SKILL.md",
       "digest": "sha256:40a95cbf12c0102524464891e62665979faf5f72564a7a1bf5bd3db580cbd974"
+    },
+    {
+      "name": "track-earthquakes",
+      "type": "skill-md",
+      "description": "Retrieve recent earthquakes (USGS) with magnitude, depth, location, and a concern score that flags proximity to nuclear test sites. Use when the user asks about recent seismic activity or whether an earthquake was natural.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/track-earthquakes/SKILL.md",
+      "digest": "sha256:125d8ac7b33727540dd7a65b8bf53756d287811399e5f2dfa5c3cb8b8c34dc2d"
+    },
+    {
+      "name": "track-military-flights",
+      "type": "skill-md",
+      "description": "Retrieve tracked military aircraft positions (OpenSky + Wingbits) with callsign, type, operator, altitude, and activity clusters, filterable by bounding box, operator, and aircraft type. Use when the user asks about military air activity in a region.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/track-military-flights/SKILL.md",
+      "digest": "sha256:3a23ab74dad871fae10b73dc2d49c108ed193324eac82a650873d56a09883358"
+    },
+    {
+      "name": "track-tariff-trends",
+      "type": "skill-md",
+      "description": "Retrieve tariff-rate timeseries for a country pair — applied vs bound rates by product sector and year, plus the current effective tariff rate. Use when the user asks how tariffs between two countries have changed or what rate applies to a sector.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/track-tariff-trends/SKILL.md",
+      "digest": "sha256:b58eac052744213603d0f3dd9f929d10a7ec0787f6a8d17001b0945aab01236a"
+    },
+    {
+      "name": "track-vessel-traffic",
+      "type": "skill-md",
+      "description": "Retrieve a point-in-time AIS vessel-traffic snapshot with disruption candidates and optional tanker overlay, filterable by bounding box. Use when the user asks what ships are in an area, or whether maritime traffic is disrupted.",
+      "url": "https://worldmonitor.app/.well-known/agent-skills/track-vessel-traffic/SKILL.md",
+      "digest": "sha256:d5f71f8f350aae55d5a5a55c0ea3e2b9f1220e8dd4ba67e65c1b00990df12dff"
     }
   ]
 }
