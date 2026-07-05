@@ -106,12 +106,15 @@ const BRIEF_LLM_SKIP_PROVIDERS = ['ollama', 'groq'];
 /**
  * Resolve a `whyMatters` sentence for one story.
  *
- * Three-layer graceful degradation:
+ * Four-layer graceful degradation:
  *   1. `deps.callAnalystWhyMatters(story)` — the analyst-context edge
  *      endpoint (brief:llm:whymatters:v8 cache lives there). Preferred.
- *   2. Legacy direct-Gemini chain: cacheGet (v4) → callLLM → cacheSet.
+ *   2. Direct read of the endpoint's v8 envelope cache (#4914) — the
+ *      endpoint CALL can fail while its cached envelope is still valid;
+ *      reusing it avoids a paid duplicate generation.
+ *   3. Legacy direct-Gemini chain: cacheGet (v5) → callLLM → cacheSet.
  *      Runs whenever the analyst call is missing, returns null, or throws.
- *   3. Caller (enrichBriefEnvelopeWithLLM) uses the baseline stub if
+ *   4. Caller (enrichBriefEnvelopeWithLLM) uses the baseline stub if
  *      this function returns null.
  *
  * Returns null on all-layer failure.
@@ -153,6 +156,29 @@ export async function generateWhyMatters(story, deps) {
     }
   }
 
+  // #4914: before paying a direct-Gemini generation, check the analyst
+  // endpoint's OWN cache namespace. api/internal/brief-why-matters.ts
+  // stores its envelope at brief:llm:whymatters:v8:{hash} under the same
+  // hashBriefStory identity — when the endpoint CALL failed transiently
+  // (or no endpoint is configured), the story may already have a paid,
+  // validated envelope sitting in Redis. Read-only: this fallback's own
+  // single-sentence output stays in the legacy v5 namespace below, so the
+  // two prompt contracts never cross-contaminate in the write direction.
+  const storyHash = await hashBriefStory(story);
+  try {
+    const v8 = await deps.cacheGet(`brief:llm:whymatters:v8:${storyHash}`);
+    if (v8 && typeof v8 === 'object' && typeof v8.whyMatters === 'string') {
+      const v8Trimmed = v8.whyMatters.trim();
+      // Same acceptance bounds as the live-endpoint path above.
+      if (
+        v8Trimmed.length >= 30 && v8Trimmed.length <= 500
+        && !/^story flagged by your sensitivity/i.test(v8Trimmed)
+      ) {
+        return v8Trimmed;
+      }
+    }
+  } catch { /* treat as miss */ }
+
   // Fallback path: legacy direct-Gemini chain with the v4 cache.
   // Bumped v3→v4 on 2026-05-14 alongside the F6 date-grounding line:
   // every v3 row was produced from a buildWhyMattersPrompt prompt with
@@ -168,7 +194,7 @@ export async function generateWhyMatters(story, deps) {
   // persisted on story:track:v1), post-PR carries the per-story
   // Title-Cased EventCategory value. Every v4 cache row is now stale.
   // Bump invalidates them cleanly.
-  const key = `brief:llm:whymatters:v5:${await hashBriefStory(story)}`;
+  const key = `brief:llm:whymatters:v5:${storyHash}`;
   try {
     const hit = await deps.cacheGet(key);
     if (typeof hit === 'string' && hit.length > 0) return hit;

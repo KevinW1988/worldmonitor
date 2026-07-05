@@ -14626,19 +14626,26 @@ async function redisSet(url, token, key, data, ttlSeconds) {
   } catch (err) { console.warn(`  [Redis] Cache write failed for ${key}: ${err.message}`); }
 }
 
-function buildCacheHash(preds) {
+// #4914: cache identity = the exact prompt text (system + user) — the same
+// pattern as the regional narrative cache (#4911). The previous hash covered
+// raw values the prompt never renders (probability floats vs the prompt's
+// integer percents, every newsContext entry vs the prompt's top-3, cascade
+// probability floats) so hourly drift minted a fresh key for a
+// byte-identical prompt and the seeder paid a full generation every run.
+// Hashing the prompt makes staleness impossible by construction: any
+// prompt-visible change (including a deploy-time system-prompt edit) is a
+// new key.
+function buildNarrativeCacheHash(systemPrompt, userPrompt) {
   return crypto.createHash('sha256')
-    .update(JSON.stringify(preds.map(p => ({
-      id: p.id, d: p.domain, r: p.region, p: p.probability,
-      s: p.signals.map(s => s.value).join(','),
-      c: p.calibration?.drift,
-      n: (p.newsContext || []).join(','),
-      t: p.trend,
-      j: p.projections ? `${p.projections.h24}|${p.projections.d7}|${p.projections.d30}` : '',
-      g: (p.cascades || []).map(cascade => `${cascade.domain}:${cascade.effect}:${cascade.probability}`).join(','),
-    }))))
+    .update(`${systemPrompt}\u0000${userPrompt}`)
     .digest('hex').slice(0, 16);
 }
+
+// Prompt-hash keys self-invalidate on any input change, so the TTL is only
+// an eviction bound, not a freshness control. The old 3600s TTL expired
+// between hourly runs, guaranteeing a paid regeneration even for an
+// unchanged prompt.
+const NARRATIVE_CACHE_TTL_SEC = 24 * 60 * 60;
 
 function buildUserPrompt(preds) {
   const predsText = preds.map((p, i) => {
@@ -14943,7 +14950,7 @@ async function enrichScenariosWithLLM(predictions) {
 
   // Call 1: Combined scenario + perspectives for top-2
   if (topWithPerspectives.length > 0) {
-    const hash = buildCacheHash(topWithPerspectives);
+    const hash = buildNarrativeCacheHash(COMBINED_SYSTEM_PROMPT, buildUserPrompt(topWithPerspectives));
     const cacheKey = `forecast:llm-combined:${hash}`;
     console.log(`  [LLM:combined] start selected=${topWithPerspectives.length} cacheKey=${cacheKey}`);
     const cached = await redisGet(url, token, cacheKey);
@@ -15078,7 +15085,7 @@ async function enrichScenariosWithLLM(predictions) {
           latencyMs: Math.round(Date.now() - t0), cached: false,
         }));
 
-        if (items.length > 0) await redisSet(url, token, cacheKey, { items }, 3600);
+        if (items.length > 0) await redisSet(url, token, cacheKey, { items }, NARRATIVE_CACHE_TTL_SEC);
       } else {
         enrichmentMeta.combined.failureReason = 'call_failed';
         console.warn('  [LLM:combined] call failed');
@@ -15090,7 +15097,7 @@ async function enrichScenariosWithLLM(predictions) {
 
   // Call 2: Scenario-only for predictions 3-4
   if (scenarioOnly.length > 0) {
-    const hash = buildCacheHash(scenarioOnly);
+    const hash = buildNarrativeCacheHash(SCENARIO_SYSTEM_PROMPT, buildUserPrompt(scenarioOnly));
     const cacheKey = `forecast:llm-scenarios:${hash}`;
     console.log(`  [LLM:scenario] start selected=${scenarioOnly.length} cacheKey=${cacheKey}`);
     const cached = await redisGet(url, token, cacheKey);
@@ -15188,7 +15195,7 @@ async function enrichScenariosWithLLM(predictions) {
               ...(c.contrarianCase ? { contrarianCase: c.contrarianCase } : {}),
             });
           }
-          await redisSet(url, token, cacheKey, { scenarios }, 3600);
+          await redisSet(url, token, cacheKey, { scenarios }, NARRATIVE_CACHE_TTL_SEC);
         }
       } else {
         enrichmentMeta.scenario.failureReason = 'call_failed';
@@ -17649,6 +17656,7 @@ export {
   computeHeadlineRelevance,
   computeMarketMatchScore,
   buildUserPrompt,
+  buildNarrativeCacheHash,
   buildForecastCase,
   buildForecastCases,
   buildPriorForecastSnapshot,
