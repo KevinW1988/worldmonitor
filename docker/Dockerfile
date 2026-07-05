@@ -11,7 +11,11 @@ WORKDIR /app
 COPY . .
 
 # Install all dependencies (including devDependencies for tsc, vite, etc.).
-RUN npm ci --include=dev
+# --ignore-scripts matches the sidecar image's proven install: it skips
+# node-gyp postinstalls (bufferutil/utf-8-validate have no prebuilt binary for
+# every buildx platform and the image carries no compiler toolchain) — those
+# are optional ws accelerators the frontend build never loads.
+RUN npm ci --include=dev --ignore-scripts
 
 # Build-time configuration. Pass via --build-arg. Other VITE_* vars (e.g. VITE_PMTILES_URL)
 # can be added here or via --build-arg for custom builds; see .env.example for the full list.
@@ -21,8 +25,10 @@ ARG VITE_WS_API_URL=https://api.worldmonitor.app
 ENV VITE_VARIANT=${VITE_VARIANT}
 ENV VITE_WS_API_URL=${VITE_WS_API_URL}
 
-# tsc + vite build (see package.json "build" script)
-RUN npm run build
+# tsc + vite build, invoked directly like the sidecar image's builder:
+# `npm run build` would chain build:blog (blog-site has its own lockfile,
+# not installed here) and the prebuild openapi/agent-skills generators.
+RUN npx tsc && npx vite build
 
 
 # Stage 2: Serve the built assets from nginx.
