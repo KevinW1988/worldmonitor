@@ -465,6 +465,62 @@ describe("api plan-limit usage scanner", () => {
     expect((await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).filter((n) => n.current)).toHaveLength(1);
   });
 
+  test("an empty {matches: []} Axiom result does not block the dimension", async () => {
+    const t = convexTest(schema, modules);
+    vi.stubEnv("AXIOM_QUERY_TOKEN", "test-token");
+    // Every Axiom query returns the canonical empty envelope. The common no-burst
+    // scan must read as empty, never axiom_unexpected_body — otherwise the sweep
+    // would freeze every open burst notice.
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      if (String(url).includes("api.axiom.co")) return new Response(JSON.stringify({ matches: [] }), { status: 200 });
+      return new Response(JSON.stringify({ result: "0" }), { status: 200 });
+    }));
+    const summary = await t.action(usageFns.scanApiPlanLimitUsageInternal, { now: NOW });
+    expect(summary.blocked.some((b: { reason?: string }) => b.reason === "axiom_unexpected_body")).toBe(false);
+  });
+
+  test("a non-array error-free Axiom body reads as empty and still recovers the notice", async () => {
+    const t = convexTest(schema, modules);
+    await seedEntitlement(t, "user-pro", "pro_monthly");
+    // Trip a live mcp burst notice (injected).
+    await t.action(usageFns.scanApiPlanLimitUsageInternal, {
+      now: NOW,
+      rows: [{ userId: "user-pro", dimension: "mcp_minute_burst", usage: 90, minuteBuckets: [61, 62, 63, 65, 66], source: "axiom:mcp_rate_limit_hit" }],
+    });
+    expect((await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).filter((n) => n.current)).toHaveLength(1);
+
+    // The EMPTY summarize response drifts to a shape WITHOUT the result arrays and
+    // WITHOUT an error field. It must be treated as empty (not blocked) so a shape
+    // drift can't freeze notices — the burst is genuinely gone, so the sweep clears it.
+    vi.stubEnv("AXIOM_QUERY_TOKEN", "test-token");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ status: { rowsMatched: 0 } }), { status: 200 })));
+    const summary = await t.action(usageFns.scanApiPlanLimitUsageInternal, { now: NOW + 3_600_000 });
+
+    expect(summary.blocked.some((b: { reason?: string }) => b.reason === "axiom_unexpected_body")).toBe(false);
+    expect((await t.run((ctx) => ctx.db.query("apiPlanLimitNotices").collect())).filter((n) => n.current)).toHaveLength(0);
+  });
+
+  test("burst detection counts rate-limit rejections so it survives enforce mode", async () => {
+    const t = convexTest(schema, modules);
+    vi.stubEnv("AXIOM_QUERY_TOKEN", "test-token");
+    let burstApl = "";
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("api.axiom.co")) {
+        const apl = JSON.parse(String(init?.body)).apl as string;
+        // The api burst query is the one keyed by customer_id + minute buckets.
+        if (apl.includes("customer_id") && apl.includes("bin(_time, 1m)")) burstApl = apl;
+        return new Response(JSON.stringify({ matches: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: "0" }), { status: 200 });
+    }));
+    await t.action(usageFns.scanApiPlanLimitUsageInternal, { now: NOW });
+    // Both shadow and enforce evidence are counted, so detection doesn't blind
+    // itself once API_RATE_LIMIT_ENFORCE flips over-limit requests to 429s.
+    expect(burstApl).toContain("rl_min_429");
+    expect(burstApl).toContain("rl_min_shadow");
+  });
+
   test("mcp_daily_calls for a Pro account uses the Redis counter, dropping the dual Axiom row", async () => {
     const t = convexTest(schema, modules);
     await seedEntitlement(t, "user-pro", "pro_monthly");

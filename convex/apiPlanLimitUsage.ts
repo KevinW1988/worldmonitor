@@ -144,11 +144,8 @@ function noticeForRow(
 }
 
 // A recognized Axiom `?format=legacy` result envelope carries its rows under one
-// of these array fields — an EMPTY array is a valid "no rows" result. Anything
-// else at HTTP 200 (an error object, a drifted schema, a bare non-result body)
-// is NOT a result: it must block the dimension, never read as zero usage, or the
-// recovery sweep would treat it as "healthy but empty" and false-clear live
-// notices. Keep the branches in sync with normalizeAxiomRows.
+// of these array fields — an EMPTY array is a valid "no rows" result. Keep the
+// branches in sync with normalizeAxiomRows.
 function isRecognizedAxiomResultShape(data: unknown): boolean {
   const d = data as any;
   return (
@@ -156,6 +153,22 @@ function isRecognizedAxiomResultShape(data: unknown): boolean {
     Array.isArray(d?.tables?.[0]?.rows) ||
     Array.isArray(d?.rows)
   );
+}
+
+// Decide whether an HTTP-200 body that ISN'T a recognized result envelope should
+// BLOCK the dimension (a genuine Axiom error) or be read as an EMPTY result.
+// Block only when the body is a non-object or carries an explicit Axiom error
+// signature (error / message / code). An unrecognized-but-error-free object is
+// treated as empty (normalizeAxiomRows yields []): this is deliberately biased
+// toward "empty" so a drift in the shape of the EMPTY summarize response can't
+// classify every routine no-burst scan as axiom_unexpected_body and freeze every
+// open burst notice via the recovery sweep. A real Axiom failure still carries an
+// error field and blocks, and a genuine outage rejects the fetch (axiom_query_error).
+function isAxiomErrorBody(data: unknown): boolean {
+  if (data == null || typeof data !== "object") return true;
+  if (isRecognizedAxiomResultShape(data)) return false;
+  const d = data as any;
+  return typeof d.error !== "undefined" || typeof d.message === "string" || typeof d.code !== "undefined";
 }
 
 function normalizeAxiomRows(data: unknown, dimension: PlanLimitDimension): ScannerUsageRow[] {
@@ -214,10 +227,11 @@ async function queryAxiom(apl: string, dimension: PlanLimitDimension): Promise<{
       return { rows: [], blockedReason: `axiom_query_http_${resp.status}` };
     }
     const json = await resp.json();
-    if (!isRecognizedAxiomResultShape(json)) {
-      // HTTP 200 but not a result envelope — an Axiom error body or drifted
-      // schema. Block the dimension instead of letting normalizeAxiomRows yield
-      // an empty [] that reads identically to a genuinely-empty result.
+    if (isAxiomErrorBody(json)) {
+      // HTTP 200 carrying an Axiom error signature (or a non-object body). Block
+      // the dimension instead of letting normalizeAxiomRows yield an empty [] that
+      // reads identically to a genuinely-empty result. A recognized-or-plausibly-
+      // empty body falls through and normalizes (to [] when it has no rows).
       return { rows: [], blockedReason: "axiom_unexpected_body" };
     }
     return { rows: normalizeAxiomRows(json, dimension) };
