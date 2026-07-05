@@ -1,0 +1,18 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "app.worldmonitor/mcp",
+  "title": "World Monitor",
+  "description": "WorldMonitor's live global-intelligence stack as an MCP server: real-time markets, conflict events, aviation, maritime, energy, climate, health, displacement, supply chain, and AI-generated regional briefs. 39 tools with JMESPath projection; discovery methods are anonymous.",
+  "websiteUrl": "https://www.worldmonitor.app",
+  "repository": {
+    "url": "https://github.com/koala73/worldmonitor",
+    "source": "github"
+  },
+  "version": "1.13.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://worldmonitor.app/mcp"
+    }
+  ]
+}
