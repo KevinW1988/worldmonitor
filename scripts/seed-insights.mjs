@@ -25,11 +25,7 @@ import {
 // the seeder on startup. The local pattern is the `./shared/geo-extract.mjs`
 // line above. PR #3836 review caught this. See skill
 // railway-deploy-gotchas/reference/nixpacks-root-dir-scripts-cross-dir-import-escape.
-import {
-  validateNoHallucinatedProperNouns,
-  checkLeadGrounding,
-  verifyCitationIndexes,
-} from './shared/brief-llm-core.js';
+import { validateNoHallucinatedProperNouns } from './shared/brief-llm-core.js';
 
 // Hallucination validator rollout mode (PR-2 of brief-content-quality
 // regressions). `shadow` = log violations to Sentry but ship the LLM
@@ -590,10 +586,12 @@ async function fetchInsights() {
       `drops adm=${provenance.selectionDrops.admissibility} srcCap=${provenance.selectionDrops.sourceCap} overflow=${provenance.selectionDrops.overflow}`,
   );
 
-  // #4921 staleness footer: the age window of the material this brief was
-  // built from, computed server-side (the client only sees topStories).
-  const pubTimes = normalizedItems
-    .map(item => new Date(item.pubDate).getTime())
+  // #4921 staleness footer: the age window of the BRIEF'S OWN material —
+  // the top stories the synthesis cites — not the whole digest pool
+  // (#4928 external review: an unrelated fresh item made the footer claim
+  // the brief's sources were fresher than they are).
+  const pubTimes = topStories
+    .map(story => new Date(story.pubDate).getTime())
     .filter(Number.isFinite);
   const sourceAgeRange = pubTimes.length > 0
     ? { newestMs: Math.max(...pubTimes), oldestMs: Math.min(...pubTimes) }

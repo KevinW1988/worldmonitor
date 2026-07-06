@@ -281,3 +281,81 @@ describe('boundary + contract pins (#4928 review)', () => {
     assert.match(text, /\[1\]/);
   });
 });
+
+// ── #4928 external-review round ────────────────────────────────────────────
+
+describe('citation-scoped composer gates (#4928 external review)', () => {
+  const STORIES2 = [
+    { primaryTitle: 'Iran threatens to close Strait of Hormuz', primarySource: 'Reuters', primaryLink: 'https://r/1', pubDate: '2026-07-06T01:00:00Z', sources: ['Reuters', 'BBC'] },
+    { primaryTitle: 'Turkey hikes interest rates to 50%', primarySource: 'Bloomberg', primaryLink: 'https://b/2', pubDate: '2026-07-06T02:00:00Z', sources: ['Bloomberg'] },
+  ];
+  const passOpts = { validatorMode: 'enforce', sourceFromStory: (s) => ({ title: s.primaryTitle, source: s.primarySource, url: s.primaryLink }) };
+
+  it('REGRESSION: a lead sentence attributing story-2 facts to [1] is rejected (misattribution)', () => {
+    const misattributed = JSON.stringify({
+      lead: 'Turkey hikes interest rates to 50% in a dramatic move [1]. Iran threatens the Strait of Hormuz [1].',
+      lines: [
+        { n: 1, text: 'Iran threatens to close the Strait of Hormuz [1].' },
+        { n: 2, text: 'Turkey raises interest rates to 50% [2].' },
+      ],
+    });
+    assert.equal(composeSynthesizedBrief(misattributed, STORIES2, passOpts), null,
+      'Turkey facts cited to [1] (Iran) must fail citation-scoped validation');
+  });
+
+  it('REGRESSION: an uncited lead sentence rejects the synthesis (every claim cited)', () => {
+    const uncited = JSON.stringify({
+      lead: 'Iran threatens the Strait of Hormuz [1]. Markets everywhere are nervous about what comes next.',
+      lines: [
+        { n: 1, text: 'Iran threatens to close the Strait of Hormuz [1].' },
+        { n: 2, text: 'Turkey raises interest rates to 50% [2].' },
+      ],
+    });
+    assert.equal(composeSynthesizedBrief(uncited, STORIES2, passOpts), null);
+  });
+
+  it('REGRESSION: a line carrying the WRONG in-range citation is rewritten to its own [n]', () => {
+    const wrongCite = JSON.stringify({
+      lead: 'Iran raises the stakes around Hormuz [1] while Turkey delivers a dramatic rate hike [2].',
+      lines: [
+        { n: 1, text: 'Iran threatens to close the Strait of Hormuz [1].' },
+        { n: 2, text: 'Turkey raises interest rates to 50% [1].' },
+      ],
+    });
+    const out = composeSynthesizedBrief(wrongCite, STORIES2, passOpts);
+    assert.ok(out);
+    assert.match(out.lines[1].text, /\[2\]$/, 'line 2 must end with [2], never [1]');
+    assert.doesNotMatch(out.lines[1].text.replace(/\[2\]$/, ''), /\[\d+\]/, 'foreign citations stripped');
+  });
+
+  it('REGRESSION: a line with no surviving citation still ends with its own [n]', () => {
+    const uncitedLine = JSON.stringify({
+      lead: 'Iran raises the stakes around Hormuz [1] while Turkey delivers a dramatic rate hike [2].',
+      lines: [
+        { n: 1, text: 'Iran threatens to close the Strait of Hormuz [9].' },
+        { n: 2, text: 'Turkey raises interest rates to 50% [2].' },
+      ],
+    });
+    const out = composeSynthesizedBrief(uncitedLine, STORIES2, passOpts);
+    assert.ok(out);
+    assert.match(out.lines[0].text, /\[1\]$/);
+  });
+});
+
+describe('balanced-brace extraction (#4928 external review P3)', () => {
+  it('a stray closing brace in trailing prose no longer defeats the parse', () => {
+    const withStray = JSON.stringify({
+      lead: 'Iran escalates around Hormuz [1] and markets brace for the fallout of it all [1].',
+      lines: [{ n: 1, text: 'Iran threatens to close the Strait of Hormuz [1].' }],
+    }) + '\nHope that helps! (edge case: })';
+    assert.ok(parseBriefSynthesis(withStray, 1), 'stray } after the object must not break extraction');
+  });
+
+  it('braces inside JSON strings do not confuse the scanner', () => {
+    const withInnerBrace = JSON.stringify({
+      lead: 'Iran { escalates } around Hormuz [1] and markets brace for the fallout today [1].',
+      lines: [{ n: 1, text: 'Iran threatens to close the Strait of Hormuz [1].' }],
+    });
+    assert.ok(parseBriefSynthesis(withInnerBrace, 1));
+  });
+});

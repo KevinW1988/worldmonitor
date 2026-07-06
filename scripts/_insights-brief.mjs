@@ -88,10 +88,31 @@ export function synthesisUserPrompt(stories) {
  */
 export function parseBriefSynthesis(rawText, storyCount) {
   if (typeof rawText !== 'string' || rawText.length === 0) return null;
-  let text = rawText.replace(/```(?:json)?/gi, '').trim();
+  const text = rawText.replace(/```(?:json)?/gi, '').trim();
   const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end <= start) return null;
+  if (start === -1) return null;
+  // Balanced, string-aware brace scan (#4928 external review): a stray
+  // '}' in trailing prose defeated lastIndexOf-based slicing.
+  let end = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  if (end === -1) return null;
   let parsed;
   try {
     parsed = JSON.parse(text.slice(start, end + 1));
@@ -156,38 +177,53 @@ export function composeSynthesizedBrief(rawText, topStories, opts = {}) {
   const parsed = parseBriefSynthesis(rawText, topStories.length);
   if (!parsed) return null;
 
-  const allTitles = topStories.map((story) => story.primaryTitle).join(' — ');
   const groundingStories = topStories.map((story) => ({ headline: story.primaryTitle }));
+  const storyGroundText = (story) =>
+    [story.primaryTitle, ...(Array.isArray(story.memberTitles) ? story.memberTitles : [])].join(' — ');
 
-  // Lead gates: invented proper nouns are a hard reject in enforce mode
-  // (anchor PRESENCE via checkLeadGrounding is necessary but not
-  // sufficient — a lead can name one real anchor and still fabricate).
-  const leadValidation = validateNoHallucinatedProperNouns(parsed.lead, allTitles);
-  if (!leadValidation.ok && validatorMode === 'enforce') return null;
-  if (!checkLeadGrounding({ lead: parsed.lead }, groundingStories, topStories.length)) return null;
-
+  // Lead gates (#4928 external review — citation-SCOPED, not corpus-wide):
+  // every lead sentence must carry at least one citation, and its proper
+  // nouns must ground against ONLY the stories it cites. Corpus-wide
+  // validation let a claim bind to [1] while its facts came from story 3
+  // — shape-valid misattribution. Anchor grounding stays as the overall
+  // floor. Any lead-level failure rejects to the legacy fallback.
   let strippedCitations = 0;
   const leadCheck = verifyCitationIndexes(parsed.lead, topStories.length);
   strippedCitations += leadCheck.stripped;
+  const leadSentences = leadCheck.text.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.trim().length > 0);
+  if (leadSentences.length === 0) return null;
+  for (const sentence of leadSentences) {
+    const cited = [...sentence.matchAll(/\[(\d{1,3})\]/g)]
+      .map((match) => Number.parseInt(match[1], 10))
+      .filter((n) => n >= 1 && n <= topStories.length);
+    // Contract: every claim is cited. An uncited sentence is unverifiable.
+    if (cited.length === 0) return null;
+    const scopedGround = cited.map((n) => storyGroundText(topStories[n - 1])).join(' — ');
+    const sentenceValidation = validateNoHallucinatedProperNouns(sentence, scopedGround);
+    if (!sentenceValidation.ok && validatorMode === 'enforce') return null;
+  }
+  if (!checkLeadGrounding({ lead: leadCheck.text }, groundingStories, topStories.length)) return null;
 
   const lineByIndex = new Map(parsed.lines.map((line) => [line.n, line.text]));
   let hallucinatedLines = 0;
   const lines = topStories.map((story, i) => {
     const n = i + 1;
     const headline = sanitize(story.primaryTitle);
-    const raw = lineByIndex.get(n);
     // Missing/degraded lines keep their citation so the contract
-    // ("every line ends with its [n]") holds for renderers.
-    if (!raw) return { n, text: `${headline} [${n}]` };
-    const lineCitations = verifyCitationIndexes(raw, topStories.length);
-    strippedCitations += lineCitations.stripped;
-    const groundText = [story.primaryTitle, ...(Array.isArray(story.memberTitles) ? story.memberTitles : [])].join(' — ');
-    const validation = validateNoHallucinatedProperNouns(lineCitations.text, groundText);
+    // ("every line ends with its own [n]") holds for renderers.
+    if (!lineByIndex.has(n)) return { n, text: `${headline} [${n}]` };
+    // #4928 external review: a line for story n could carry [1] (or no
+    // citation at all after stripping) and the renderer would link the
+    // wrong source. The line's content is validated against story n, so
+    // its ONLY correct citation is [n]: strip every bracket marker and
+    // append the canonical one.
+    const bare = lineByIndex.get(n).replace(/\s*\[\d{1,3}\]/g, '').trim();
+    const validation = validateNoHallucinatedProperNouns(bare, storyGroundText(story));
     if (!validation.ok) {
       hallucinatedLines++;
       if (validatorMode === 'enforce') return { n, text: `${headline} [${n}]` };
     }
-    return { n, text: lineCitations.text };
+    return { n, text: `${bare} [${n}]` };
   });
 
   // STRICT index lockstep: never filter — substitute.
