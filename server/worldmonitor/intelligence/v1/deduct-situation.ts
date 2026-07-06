@@ -107,7 +107,11 @@ export async function deductSituation(
         : '';
 
     const predictionHash = predictionContext ? (await sha256Hex(predictionContext)).slice(0, 8) : '';
-    const cacheKey = `deduct:situation:v2:${queryHash.slice(0, 16)}${frameworkHash ? ':fw' + frameworkHash : ''}${predictionHash ? ':pm' + predictionHash : ''}`;
+    // v2 → v3 (2026-07-06, #4944 U4): the reasoning tier moved to DeepSeek
+    // (LLM_REASONING_MODEL at the U3 flip) — v2 rows carry old-model
+    // analysis and must age out. Deploys post-U3 with this PR; the 1h TTL
+    // self-heals any U3→U4 staleness window.
+    const cacheKey = `deduct:situation:v3:${queryHash.slice(0, 16)}${frameworkHash ? ':fw' + frameworkHash : ''}${predictionHash ? ':pm' + predictionHash : ''}`;
 
     const { mode, systemPrompt, userPrompt } = buildDeductionPrompt({ query, geoContext, predictionContext });
 
