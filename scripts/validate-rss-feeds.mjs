@@ -418,11 +418,20 @@ export async function publishFeedHealth(results) {
   const { buildFeedHealthPayload } = await import('./_feed-health.mjs');
   const redis = (command) => upstashCommand(creds, command);
 
+  // Streak continuity (#4927 external review): distinguish "key absent"
+  // (first run — fresh streaks are correct) from "read FAILED" (transient
+  // Redis/network error — publishing would silently reset every
+  // consecutive-empty streak and hide silent-zero continuity). On a
+  // failed read, skip this run's publish entirely; tomorrow's run
+  // continues the streaks.
   let previous = null;
   try {
     const got = await redis(['GET', 'news:feed-health:v1']);
     if (typeof got?.result === 'string') previous = JSON.parse(got.result);
-  } catch { /* first run / transient — streaks restart */ }
+  } catch (err) {
+    console.warn(`feed-health publish skipped: previous-state read failed (${err.message}) — preserving streaks`);
+    return { published: false, reason: 'previous-read-failed' };
+  }
 
   const payload = buildFeedHealthPayload(results, previous, Date.now());
   await redis(['SET', 'news:feed-health:v1', JSON.stringify(payload), 'EX', String(3 * 86400)]);

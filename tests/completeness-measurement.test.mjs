@@ -279,3 +279,20 @@ function readdirSyncLocales() {
   return readdirSync(resolve(root, 'src/locales'))
     .filter((f) => f.endsWith('.json') && f !== 'en.shell.json');
 }
+
+describe('feed-health streak continuity (#4927 external review)', () => {
+  it('a failed previous-state read skips publish instead of resetting streaks', async () => {
+    process.env.UPSTASH_REDIS_REST_URL = 'https://stub.upstash.example';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'stub-token';
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => { throw new Error('ECONNRESET'); };
+    try {
+      const out = await publishFeedHealth([{ name: 'X', url: 'https://x/rss', status: 'EMPTY' }]);
+      assert.deepEqual(out, { published: false, reason: 'previous-read-failed' });
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.UPSTASH_REDIS_REST_URL;
+      delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    }
+  });
+});
