@@ -814,9 +814,21 @@ export async function handleSubscriptionCancelled(
 
   if (!isNewerEvent(existing.updatedAt, eventTimestamp)) return;
 
-  const cancelledAt = data.cancelled_at
+  // Episode anchor (#4932, PR #4935 review round 4): only the transition
+  // INTO cancelled opens a new cancellation episode. Repeat cancellation-
+  // flavored events (`subscription.updated` with status="cancelled" routes
+  // here too, often WITHOUT a stable cancelled_at) must not move the
+  // anchor — the winback ledger is keyed on it, so a moved anchor reopens
+  // the one-shot winback and emails the same cancellation twice. A real
+  // new episode (cancelled → active → cancelled) passes through a
+  // non-cancelled status first, so enteringCancelled correctly re-anchors.
+  const enteringCancelled = existing.status !== "cancelled";
+  const eventCancelledAt = data.cancelled_at
     ? toEpochMs(data.cancelled_at, "cancelled_at", eventTimestamp)
     : eventTimestamp;
+  const cancelledAt = enteringCancelled
+    ? eventCancelledAt
+    : (existing.cancelledAt ?? eventCancelledAt);
 
   await ctx.db.patch(existing._id, {
     status: "cancelled",

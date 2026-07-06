@@ -432,6 +432,20 @@ export const getDunningContext = internalQuery({
           (s.status === "cancelled" && s.currentPeriodEnd > now)),
     );
 
+    // Entitlement coverage beyond subscriptions (PR #4935 review round 4):
+    // the recompute preserves a standing comp floor (entitlements.compUntil)
+    // and its validUntil is the max over ALL coverage sources — a comped
+    // user with an ended subscription is still entitled and must not get
+    // "your access has ended".
+    const entitlement = await ctx.db
+      .query("entitlements")
+      .withIndex("by_userId", (q) => q.eq("userId", sub.userId))
+      .first();
+    const entitlementCoveredUntil = Math.max(
+      entitlement?.validUntil ?? 0,
+      entitlement?.compUntil ?? 0,
+    );
+
     return {
       userId: sub.userId,
       planKey: sub.planKey,
@@ -441,6 +455,7 @@ export const getDunningContext = internalQuery({
       currentPeriodEnd: sub.currentPeriodEnd,
       email: email.trim(),
       hasLiveSub,
+      entitlementCoveredUntil,
     };
   },
 });
@@ -608,6 +623,9 @@ export const sendDunningEmail = internalAction({
       // the T2 window gets its own ledger entry and its own single send.
       if (sub.cancelledAt !== args.episodeAt) return { sent: false, reason: "stale_episode" as const };
       if (sub.currentPeriodEnd > Date.now()) return { sent: false, reason: "still_entitled" as const };
+      // Comp floor / recomputed entitlement window (round-4 F5): a comped
+      // user is covered even with every subscription ended.
+      if (sub.entitlementCoveredUntil > Date.now()) return { sent: false, reason: "still_entitled" as const };
       if (sub.hasLiveSub) return { sent: false, reason: "resubscribed" as const };
     } else {
       // Dunning only while THIS episode is still open — a recovery or a

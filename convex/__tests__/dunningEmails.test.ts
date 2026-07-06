@@ -485,6 +485,86 @@ describe("winback", () => {
     expect(resendSends(fetchMock)).toHaveLength(0);
   });
 
+  test("repeat cancelled-flavored subscription.updated does NOT re-open the winback (round-4 F1)", async () => {
+    vi.useFakeTimers();
+    process.env.RESEND_API_KEY = "re_test";
+    const fetchMock = mockResend();
+    const t = convexTest(schema, modules);
+    const anchor = Date.now() - 40 * DAY_MS;
+    await seedSub(t, {
+      status: "cancelled",
+      cancelledAt: anchor,
+      currentPeriodEnd: Date.now() - 35 * DAY_MS,
+      updatedAt: anchor,
+    });
+
+    await t.mutation(internal.payments.subscriptionEmails.runDunningScan, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(resendSends(fetchMock)).toHaveLength(1);
+
+    // Dodo re-sends a cancellation-flavored subscription.updated with NO
+    // cancelled_at. The anchor must freeze — rewriting it to the event
+    // timestamp re-keys the winback ledger and the one-shot fires again.
+    await t.mutation(internal.payments.webhookMutations.processWebhookEvent, {
+      webhookId: "wh_repeat_cancel",
+      eventType: "subscription.updated",
+      rawPayload: { data: { subscription_id: SUB_ID, status: "cancelled" } },
+      timestamp: Date.now(),
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const sub = await t.run(async (ctx) =>
+      ctx.db
+        .query("subscriptions")
+        .withIndex("by_dodoSubscriptionId", (q) => q.eq("dodoSubscriptionId", SUB_ID))
+        .unique(),
+    );
+    expect(sub?.cancelledAt).toBe(anchor);
+
+    await t.mutation(internal.payments.subscriptionEmails.runDunningScan, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(resendSends(fetchMock)).toHaveLength(1);
+  });
+
+  test("comped user (compUntil in the future) is not winback-emailed (round-4 F5)", async () => {
+    vi.useFakeTimers();
+    process.env.RESEND_API_KEY = "re_test";
+    const fetchMock = mockResend();
+    const t = convexTest(schema, modules);
+    const cancelledAt = Date.now() - 40 * DAY_MS;
+    await seedSub(t, {
+      status: "cancelled",
+      cancelledAt,
+      currentPeriodEnd: Date.now() - 35 * DAY_MS,
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.insert("entitlements", {
+        userId: USER_ID,
+        planKey: "pro_monthly",
+        features: {
+          tier: 1,
+          maxDashboards: 10,
+          apiAccess: false,
+          apiRateLimit: 0,
+          prioritySupport: false,
+          exportFormats: ["csv", "pdf"],
+          mcpAccess: true,
+        },
+        validUntil: Date.now() - 35 * DAY_MS,
+        compUntil: Date.now() + 30 * DAY_MS,
+        updatedAt: Date.now() - 35 * DAY_MS,
+      });
+    });
+
+    const result = await t.action(internal.payments.subscriptionEmails.sendDunningEmail, {
+      dodoSubscriptionId: SUB_ID,
+      step: "winback_day30",
+      episodeAt: cancelledAt,
+    });
+    expect(result).toEqual({ sent: false, reason: "still_entitled" });
+    expect(resendSends(fetchMock)).toHaveLength(0);
+  });
+
   test("resubscribed user (live sibling sub) is not winback-emailed", async () => {
     vi.useFakeTimers();
     process.env.RESEND_API_KEY = "re_test";
