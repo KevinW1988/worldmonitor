@@ -746,8 +746,16 @@ export async function handleSubscriptionOnHold(
 
   if (!isNewerEvent(existing.updatedAt, eventTimestamp)) return;
 
+  // Episode anchor (#4932): only the transition INTO on_hold opens a new
+  // dunning episode. Repeated on_hold webhooks (Dodo payment-retry failures,
+  // replays) keep the original anchor so the day-3/day-7 clock doesn't reset
+  // and the day-0 email isn't re-sent.
+  const enteringHold = existing.status !== "on_hold";
+  const onHoldAt = enteringHold ? eventTimestamp : (existing.onHoldAt ?? eventTimestamp);
+
   await ctx.db.patch(existing._id, {
     status: "on_hold",
+    onHoldAt,
     dodoCustomerId: mergeDodoCustomerId(data, existing),
     rawPayload: data,
     updatedAt: eventTimestamp,
@@ -757,6 +765,22 @@ export async function handleSubscriptionOnHold(
     `[subscriptionHelpers] Subscription ${data.subscription_id} on hold -- payment failure`,
   );
   // Do NOT revoke entitlements -- they remain valid until currentPeriodEnd
+
+  // Day-0 dunning email (#4932), same non-blocking scheduler pattern as the
+  // welcome email. The action re-validates state (still on_hold, same
+  // episode, not suppressed, not already sent) before sending, so scheduling
+  // here is safe even if a recovery webhook lands in between.
+  if (enteringHold && process.env.RESEND_API_KEY) {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.payments.subscriptionEmails.sendDunningEmail,
+      {
+        dodoSubscriptionId: data.subscription_id,
+        step: "dunning_day0",
+        episodeAt: onHoldAt,
+      },
+    );
+  }
 }
 
 /**

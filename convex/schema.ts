@@ -535,12 +535,44 @@ export default defineSchema({
     // may still rely on tiers 2-3 until
     // `backfillSubscriptionDodoCustomerId` lands their values here.
     dodoCustomerId: v.optional(v.string()),
+    // Epoch ms of the event that opened the CURRENT on_hold episode.
+    // Set by handleSubscriptionOnHold only on the active→on_hold
+    // transition (webhook replays while already on_hold keep the
+    // original anchor), and used as the dunning episode key (#4932):
+    // day-3/day-7 reminders compute their age from it, and the
+    // dunningEmails ledger scopes idempotency to it so a NEW payment
+    // failure months later starts a fresh email sequence. Optional —
+    // rows that entered on_hold before this field existed fall back
+    // to `updatedAt` in the dunning scan.
+    onHoldAt: v.optional(v.number()),
     rawPayload: v.any(),
     updatedAt: v.number(),
   })
     .index("by_userId", ["userId"])
     .index("by_dodoSubscriptionId", ["dodoSubscriptionId"])
-    .index("by_dodoCustomerId", ["dodoCustomerId"]),
+    .index("by_dodoCustomerId", ["dodoCustomerId"])
+    // Dunning/winback scan (#4932): fetch on_hold + cancelled subs without
+    // a full-table scan. Cardinality is tiny (tens of rows per status).
+    .index("by_status", ["status"]),
+
+  // Dunning/winback send ledger (#4932): one row per email step actually
+  // delivered for a given subscription episode. `episodeAt` is the on_hold
+  // anchor (dunning steps) or `cancelledAt` (winback), so a later, separate
+  // payment-failure episode legitimately re-sends the sequence while webhook
+  // replays and overlapping cron ticks stay idempotent. Growth is bounded by
+  // real billing events (≤4 rows per episode), so no prune cron is needed.
+  dunningEmails: defineTable({
+    dodoSubscriptionId: v.string(),
+    step: v.union(
+      v.literal("dunning_day0"),
+      v.literal("dunning_day3"),
+      v.literal("dunning_day7"),
+      v.literal("winback_day30"),
+    ),
+    episodeAt: v.number(),
+    email: v.string(),
+    sentAt: v.number(),
+  }).index("by_sub_step_episode", ["dodoSubscriptionId", "step", "episodeAt"]),
 
   entitlements: defineTable({
     userId: v.string(),
