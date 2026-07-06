@@ -132,6 +132,10 @@ function installLocalStorage(initial: Record<string, string> = {}): Map<string, 
   return values;
 }
 
+function proHtmlKey(id: string): string {
+  return `wm-pro-html-${id}`;
+}
+
 function makeProWidget(overrides: Partial<CustomWidgetSpec> = {}): CustomWidgetSpec {
   return {
     id: 'cw-pro-reload',
@@ -152,7 +156,7 @@ function makeProWidget(overrides: Partial<CustomWidgetSpec> = {}): CustomWidgetS
 
 describe('widget-store PRO persistence', () => {
   it('saveWidget persists PRO generated HTML in the canonical widget entry', async () => {
-    installLocalStorage();
+    const storage = installLocalStorage();
     const { saveWidget } = await loadWidgetStore();
 
     saveWidget(makeProWidget());
@@ -160,6 +164,7 @@ describe('widget-store PRO persistence', () => {
     const stored = JSON.parse(localStorage.getItem('wm-custom-widgets') ?? '[]') as Array<{ html?: string }>;
     assert.equal(stored.length, 1);
     assert.match(stored[0]?.html ?? '', /reload-marker/);
+    assert.equal(storage.has(proHtmlKey('cw-pro-reload')), false);
   });
 
   it('loadWidgets restores PRO HTML from the canonical entry when the side key is absent', async () => {
@@ -174,5 +179,49 @@ describe('widget-store PRO persistence', () => {
     assert.equal(widgets.length, 1);
     assert.equal(widgets[0]?.id, spec.id);
     assert.match(widgets[0]?.html ?? '', /reload-marker/);
+  });
+
+  it('loadWidgets restores legacy PRO HTML from the side key when canonical HTML is absent', async () => {
+    const spec = makeProWidget({ html: '' });
+    installLocalStorage({
+      'wm-custom-widgets': JSON.stringify([spec]),
+      [proHtmlKey(spec.id)]: '<div class="legacy-side-key">legacy widget</div>',
+    });
+    const { loadWidgets } = await loadWidgetStore();
+
+    const widgets = loadWidgets();
+
+    assert.equal(widgets.length, 1);
+    assert.equal(widgets[0]?.id, spec.id);
+    assert.match(widgets[0]?.html ?? '', /legacy-side-key/);
+  });
+
+  it('loadWidgets prefers canonical PRO HTML over a stale side key', async () => {
+    const spec = makeProWidget({
+      html: '<div class="canonical-html">current widget</div>',
+    });
+    installLocalStorage({
+      'wm-custom-widgets': JSON.stringify([spec]),
+      [proHtmlKey(spec.id)]: '<div class="stale-side-key">old widget</div>',
+    });
+    const { loadWidgets } = await loadWidgetStore();
+
+    const widgets = loadWidgets();
+
+    assert.equal(widgets.length, 1);
+    assert.match(widgets[0]?.html ?? '', /canonical-html/);
+    assert.doesNotMatch(widgets[0]?.html ?? '', /stale-side-key/);
+  });
+
+  it('loadWidgets drops PRO widgets when no persisted HTML remains', async () => {
+    const spec = makeProWidget({ html: '' });
+    installLocalStorage({
+      'wm-custom-widgets': JSON.stringify([spec]),
+    });
+    const { loadWidgets } = await loadWidgetStore();
+
+    const widgets = loadWidgets();
+
+    assert.equal(widgets.length, 0);
   });
 });

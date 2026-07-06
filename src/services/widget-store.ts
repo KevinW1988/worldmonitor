@@ -39,15 +39,12 @@ export function loadWidgets(): CustomWidgetSpec[] {
     if (tier === 'pro') {
       const sideKeyHtml = localStorage.getItem(proHtmlKey(w.id));
       const storedHtml = typeof w.html === 'string' ? w.html : '';
-      const proHtml = sideKeyHtml || storedHtml;
+      const proHtml = storedHtml || sideKeyHtml;
       if (!proHtml) {
         // HTML missing — drop widget and clean up spans
         clearPanelSpanEntry(w.id);
         clearPanelColSpanEntry(w.id);
         continue;
-      }
-      if (!sideKeyHtml && storedHtml) {
-        try { localStorage.setItem(proHtmlKey(w.id), storedHtml); } catch { /* best-effort side-key repair */ }
       }
       result.push({ ...w, tier, html: proHtml });
     } else {
@@ -60,12 +57,6 @@ export function loadWidgets(): CustomWidgetSpec[] {
 export function saveWidget(spec: CustomWidgetSpec): void {
   if (spec.tier === 'pro') {
     const proHtml = spec.html.slice(0, MAX_HTML_CHARS_PRO);
-    // Write HTML first (raw localStorage — must be catchable for rollback)
-    try {
-      localStorage.setItem(proHtmlKey(spec.id), proHtml);
-    } catch {
-      throw new Error('Storage quota exceeded saving PRO widget HTML');
-    }
     const meta: CustomWidgetSpec = {
       ...spec,
       html: proHtml,
@@ -75,10 +66,9 @@ export function saveWidget(spec: CustomWidgetSpec): void {
     const updated = [...existing, meta].slice(-MAX_WIDGETS);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      try { localStorage.removeItem(proHtmlKey(spec.id)); } catch { /* ignore legacy side-key cleanup */ }
     } catch {
-      // Rollback HTML write
-      localStorage.removeItem(proHtmlKey(spec.id));
-      throw new Error('Storage quota exceeded saving PRO widget metadata');
+      throw new Error('Storage quota exceeded saving PRO widget');
     }
   } else {
     const trimmed: CustomWidgetSpec = {

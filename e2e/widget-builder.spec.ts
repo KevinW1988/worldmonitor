@@ -542,12 +542,10 @@ test.describe('AI widget builder — PRO tier', () => {
     });
 
     expect(storage).not.toBeNull();
-    // Main array must carry the generated HTML so reload does not depend only on
-    // the compatibility side key.
+    // Main array is canonical; the legacy side key should not be needed for new saves.
     expect(storage!.entry.tier).toBe('pro');
     expect(storage!.entry.html).toContain('pro-crypto');
-    // HTML also remains in the separate key for existing sandbox handoff paths.
-    expect(storage!.proHtmlStored).toContain('pro-crypto');
+    expect(storage!.proHtmlStored).toBeNull();
 
     await page.reload();
     await expect(page.locator('.custom-widget-panel', {
