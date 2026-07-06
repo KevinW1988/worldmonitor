@@ -1623,7 +1623,7 @@ describe('buildStoryDescriptionPrompt — RSS grounding (U5)', () => {
     }));
     assert.ok(
       user.includes(`Context: ${body}`),
-      'prompt must carry the real article body as grounding so Gemini paraphrases the article instead of hallucinating from the headline',
+      'prompt must carry the real article body as grounding so the model paraphrases the article instead of hallucinating from the headline',
     );
     // Ordering: Context sits between the metadata block and the
     // "One editorial sentence" instruction.
@@ -1724,11 +1724,11 @@ describe('generateStoryDescription — sanitisation + prefix bump (U5)', () => {
     assert.match(setCalls[0].key, /^brief:llm:description:v4:/, 'cache prefix must be v4 post-bump (#4944 U4 model cutover)');
   });
 
-  it('ignores legacy v1 / v2 cache entries (prefix bump forces cold start)', async () => {
-    // Simulate leftover v1 and v2 rows; writer now keys on v3 (PR #3751
+  it('ignores stale v1 / v2 cache entries (prefix bump forces cold start)', async () => {
+    // Simulate leftover v1 and v2 rows; writer now keys on v4 (#4944 U4
     // bumped v2→v3 alongside category persistence), reader is keyed on
-    // v3 too, so the legacy rows are effectively dark — verified by the
-    // reader not serving a matching legacy row.
+    // the current prefix too, so the stale rows are effectively dark —
+    // verified by the reader not serving a matching stale row.
     const store = new Map();
     const v1Key = `brief:llm:description:v1:${await hashBriefStory(story())}`;
     const v2Key = `brief:llm:description:v2:${await hashBriefStory(story())}`;
@@ -1743,7 +1743,7 @@ describe('generateStoryDescription — sanitisation + prefix bump (U5)', () => {
       story(),
       { ...cache, callLLM: async () => fresh },
     );
-    assert.strictEqual(out, fresh, 'legacy v1/v2 rows must NOT be served post-bump');
+    assert.strictEqual(out, fresh, 'stale v1/v2 rows must NOT be served post-bump');
     // And the freshly-written row lands under v4.
     const v4Keys = [...store.keys()].filter((k) => k.startsWith('brief:llm:description:v4:'));
     assert.strictEqual(v4Keys.length, 1);
@@ -1795,7 +1795,7 @@ describe('generateWhyMatters — v9 endpoint-cache cross-read (#4914)', () => {
     assert.equal(llm.calls.length, 0);
   });
 
-  it('malformed v8 envelope falls through to the legacy chain', async () => {
+  it('malformed v9 envelope falls through to the fallback chain', async () => {
     const cache = makeCache();
     const s = story();
     const hash = await hashBriefStory(s);
@@ -1803,10 +1803,10 @@ describe('generateWhyMatters — v9 endpoint-cache cross-read (#4914)', () => {
     const llm = makeLLM('Closure of the Strait of Hormuz would spike oil prices globally.');
     const out = await generateWhyMatters(s, { ...cache, callLLM: llm.callLLM });
     assert.equal(out, 'Closure of the Strait of Hormuz would spike oil prices globally.');
-    assert.equal(llm.calls.length, 1, 'invalid v8 payload must not be served — legacy chain pays once');
+    assert.equal(llm.calls.length, 1, 'invalid v9 payload must not be served — fallback chain pays once');
   });
 
-  it('v8 sensitivity-stub prose is rejected, not served', async () => {
+  it('v9 sensitivity-stub prose is rejected, not served', async () => {
     const cache = makeCache();
     const s = story();
     await seedAnalystEnvelope(cache, s, { whyMatters: 'Story flagged by your sensitivity settings. Open for context and details.' });
