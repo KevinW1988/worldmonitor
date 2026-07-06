@@ -93,19 +93,19 @@ describe('fillEventActuals (#4922b)', () => {
       { event: 'CPI', date: '2026-07-20', actual: '', previous: '' },
       { event: 'FOMC Rate Decision', date: '2026-07-06', actual: '', previous: '' },
     ];
-    const filled = fillEventActuals(events, { CPI: { actual: '+0.3%', previous: '+0.2%' } }, TODAY);
+    const filled = fillEventActuals(events, { CPI: { actual: '+0.3', previous: '+0.2', obsDate: '2026-06-01' } }, TODAY);
     assert.equal(filled, 1);
-    assert.equal(events[0].actual, '+0.3%');
-    assert.equal(events[0].previous, '+0.2%');
+    assert.equal(events[0].actual, '+0.3');
+    assert.equal(events[0].previous, '+0.2');
     assert.equal(events[1].actual, '', 'future release stays empty');
     assert.equal(events[2].actual, '', 'unmapped event untouched');
   });
 
   it('never overwrites an existing actual', () => {
-    const events = [{ event: 'CPI', date: '2026-07-06', actual: '+0.9%', previous: '' }];
-    const filled = fillEventActuals(events, { CPI: { actual: '+0.3%', previous: '+0.2%' } }, TODAY);
+    const events = [{ event: 'CPI', date: '2026-07-06', actual: '+0.9', previous: '' }];
+    const filled = fillEventActuals(events, { CPI: { actual: '+0.3', previous: '+0.2', obsDate: '2026-06-01' } }, TODAY);
     assert.equal(filled, 0);
-    assert.equal(events[0].actual, '+0.9%');
+    assert.equal(events[0].actual, '+0.9');
   });
 });
 
@@ -214,5 +214,51 @@ describe('selectTopStories opts pass-through (#4929 review)', () => {
     const dScore = demoted.find((s) => s.primarySource === 'TechCrunch').importanceScore;
     const nScore = neutral.find((s) => s.primarySource === 'TechCrunch').importanceScore;
     assert.ok(nScore > dScore, 'opts must thread through selectTopStories to scoreImportance');
+  });
+});
+
+// ── #4929 external-review round ────────────────────────────────────────────
+
+import { observationMatchesRelease } from '../scripts/_econ-actuals.mjs';
+
+describe('release-day stale-print guard (#4929 external review P1)', () => {
+  it('REGRESSION: pre-print on release day, the prior-period observation is NOT presented as the print', () => {
+    // July 15 CPI release reports JUNE. Before 08:30 ET the latest FRED
+    // obs is still MAY — filling with it showed a stale number as today's.
+    const events = [{ event: 'CPI', date: '2026-07-15', actual: '', previous: '' }];
+    const stale = fillEventActuals(events, { CPI: { actual: '+0.2', previous: '+0.3', obsDate: '2026-05-01' } }, '2026-07-15');
+    assert.equal(stale, 0, 'May observation must not fill the June-reporting release');
+    assert.equal(events[0].actual, '');
+
+    const fresh = fillEventActuals(events, { CPI: { actual: '+0.3', previous: '+0.2', obsDate: '2026-06-01' } }, '2026-07-15');
+    assert.equal(fresh, 1, 'June observation fills the June-reporting release');
+  });
+
+  it('quarterly GDP tolerates the advance/second/third estimate window', () => {
+    assert.equal(observationMatchesRelease('2026-07-30', '2026-04-01', 'q'), true, 'advance estimate: Q2 obs, July release');
+    assert.equal(observationMatchesRelease('2026-09-25', '2026-04-01', 'q'), true, 'third estimate');
+    assert.equal(observationMatchesRelease('2026-07-30', '2026-01-01', 'q'), false, 'stale prior quarter rejected');
+  });
+});
+
+describe('misplaced-opts guard (#4929 external review)', () => {
+  it('passing { demoteFinance:false } in the stats slot still disables demotion', () => {
+    const finance = {
+      primaryTitle: 'Startup CEO announces record quarterly revenue and IPO plans today',
+      primarySource: 'TechCrunch', primaryLink: 'https://t/1',
+      pubDate: new Date().toISOString(), sources: ['TechCrunch', 'The Verge'], isAlert: true, tier: 2,
+    };
+    const shifted = selectTopStories([finance], 8, { demoteFinance: false });
+    const explicit = selectTopStories([finance], 8, undefined, { demoteFinance: false });
+    assert.equal(shifted[0].importanceScore, explicit[0].importanceScore, 'opts in the stats slot must auto-shift');
+  });
+});
+
+describe('recall benchmark fast-fail wiring (source-textual)', () => {
+  it('uses benchmark-grade limits and a shared GDELT deadline', () => {
+    const src = readSrc('scripts/seed-recall-benchmark.mjs');
+    assert.match(src, /maxRetries: 1/);
+    assert.match(src, /proxyMaxAttempts: 1/);
+    assert.match(src, /GDELT_DEADLINE_MS = 4 \* 60 \* 1000/);
   });
 });

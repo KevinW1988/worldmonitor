@@ -15,12 +15,31 @@
  */
 
 export const EVENT_SERIES = {
-  CPI: { series: 'CPIAUCSL', transform: 'pct_mom' },
-  'Nonfarm Payrolls': { series: 'PAYEMS', transform: 'diff_k' },
-  GDP: { series: 'A191RL1Q225SBEA', transform: 'direct' },
-  PCE: { series: 'PCEPI', transform: 'pct_mom' },
-  'Retail Sales': { series: 'RSAFS', transform: 'pct_mom' },
+  CPI: { series: 'CPIAUCSL', transform: 'pct_mom', freq: 'm' },
+  'Nonfarm Payrolls': { series: 'PAYEMS', transform: 'diff_k', freq: 'm' },
+  GDP: { series: 'A191RL1Q225SBEA', transform: 'direct', freq: 'q' },
+  PCE: { series: 'PCEPI', transform: 'pct_mom', freq: 'm' },
+  'Retail Sales': { series: 'RSAFS', transform: 'pct_mom', freq: 'm' },
 };
+
+/**
+ * #4929 external review (P1): on release day BEFORE the print lands,
+ * FRED's latest observation is still the PRIOR period — filling the
+ * event with it would present a stale number as today's print. The
+ * observation must belong to the period the release reports: monthly
+ * releases report the previous calendar month (diff == 1); quarterly
+ * GDP estimates report the previous quarter (1..5 months back across
+ * advance/second/third estimates).
+ */
+export function observationMatchesRelease(eventDateISO, obsDateISO, freq) {
+  const eventDate = new Date(eventDateISO);
+  const obsDate = new Date(obsDateISO);
+  if (!Number.isFinite(eventDate.getTime()) || !Number.isFinite(obsDate.getTime())) return false;
+  const monthDiff = (eventDate.getUTCFullYear() - obsDate.getUTCFullYear()) * 12
+    + (eventDate.getUTCMonth() - obsDate.getUTCMonth());
+  if (freq === 'q') return monthDiff >= 1 && monthDiff <= 5;
+  return monthDiff === 1;
+}
 
 /** FRED marks missing observations with the string '.'. */
 function parseObs(observation) {
@@ -102,11 +121,15 @@ export function fillEventActuals(events, printsByEvent, todayISO) {
     if (event.actual) continue;
     const print = printsByEvent[event.event];
     if (!print || !print.actual) continue;
-    if (typeof event.date === 'string' && event.date <= todayISO) {
-      event.actual = print.actual;
-      if (!event.previous && print.previous) event.previous = print.previous;
-      filled++;
-    }
+    if (typeof event.date !== 'string' || event.date > todayISO) continue;
+    // Stale-print guard: the observation must belong to the period THIS
+    // release reports — pre-print on release day, the latest obs is the
+    // prior period and must not be presented as today's number.
+    const freq = EVENT_SERIES[event.event]?.freq ?? 'm';
+    if (!observationMatchesRelease(event.date, print.obsDate, freq)) continue;
+    event.actual = print.actual;
+    if (!event.previous && print.previous) event.previous = print.previous;
+    filled++;
   }
   return filled;
 }

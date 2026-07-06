@@ -87,9 +87,26 @@ async function main() {
   // 2. External reference set from GDELT.
   const seenUrls = new Set();
   const externalItems = [];
+  // #4929 external review: production retry defaults (3 retries × 10s
+  // backoff + 5 proxy attempts, ×4 sequential queries) could consume much
+  // of the 25-minute workflow. Benchmark-grade fast-fail limits + a shared
+  // wall-clock deadline: partial reference sets are fine, a hung workflow
+  // is not.
+  const GDELT_DEADLINE_MS = 4 * 60 * 1000;
+  const gdeltStartedAt = Date.now();
   for (const { label, q } of REFERENCE_QUERIES) {
+    if (Date.now() - gdeltStartedAt > GDELT_DEADLINE_MS) {
+      console.warn(`  [gdelt:${label}] skipped — shared 4-min GDELT deadline exhausted`);
+      continue;
+    }
     try {
-      const json = await fetchGdeltJson(gdeltUrl(q), { label: `recall-${label}` });
+      const json = await fetchGdeltJson(gdeltUrl(q), {
+        label: `recall-${label}`,
+        timeoutMs: 10_000,
+        maxRetries: 1,
+        retryBaseMs: 2_000,
+        proxyMaxAttempts: 1,
+      });
       const articles = Array.isArray(json?.articles) ? json.articles : [];
       for (const article of articles) {
         const title = article?.title;

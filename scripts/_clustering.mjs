@@ -322,6 +322,15 @@ export function computeEntityCorroboration(clusters, nowMs = Date.now()) {
  *   each gate dropped — previously all three gates were silent.
  */
 export function selectTopStories(clusters, maxCount = 8, stats, opts = {}) {
+  // Positional-arg guard (#4929 external review): a caller passing
+  // { demoteFinance } in the stats slot would silently get default
+  // demotion AND a stats-shaped object mutated with counters. Detect the
+  // opts shape and shift.
+  if (stats && typeof stats === 'object' && 'demoteFinance' in stats
+      && (!opts || Object.keys(opts).length === 0)) {
+    opts = stats;
+    stats = undefined;
+  }
   const nowMs = Date.now();
   computeEntityCorroboration(clusters, nowMs);
   const admissible = [];
