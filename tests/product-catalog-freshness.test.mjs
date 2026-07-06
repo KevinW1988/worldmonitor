@@ -89,8 +89,8 @@ describe('Product catalog freshness', () => {
       }
     }
 
-    const groupToName = { free: 'Free', pro: 'Pro', api_starter: 'API', enterprise: 'Enterprise' };
-    const groupToLocaleKey = { free: 'free', pro: 'pro', api_starter: 'api', enterprise: 'enterprise' };
+    const groupToName = { free: 'Free', pro: 'Pro', api_starter: 'API', api_business: 'API Business', enterprise: 'Enterprise' };
+    const groupToLocaleKey = { free: 'free', pro: 'pro', api_starter: 'api', api_business: 'apiBusiness', enterprise: 'enterprise' };
     const tiersByLocaleKey = new Map(tiersJson.map((tier) => [tier.localeKey, tier]));
 
     for (const group of visibleGroups) {
@@ -224,7 +224,7 @@ describe('Product catalog freshness', () => {
 
     // Each visible group should have a corresponding tier in the JSON
     // Map group names to expected display names
-    const groupToName = { free: 'Free', pro: 'Pro', api_starter: 'API', enterprise: 'Enterprise' };
+    const groupToName = { free: 'Free', pro: 'Pro', api_starter: 'API', api_business: 'API Business', enterprise: 'Enterprise' };
     for (const group of visibleGroups) {
       const expectedName = groupToName[group] || group;
       assert.ok(

@@ -226,7 +226,10 @@ export const PRODUCT_CATALOG: Record<string, CatalogEntry> = {
     dodoProductId: "pdt_0Nbttg7NuOJrhbyBGCius",
     planKey: "api_business",
     displayName: "API Business",
-    priceCents: null,
+    // Display fallback only — the /pro page and /api/product-catalog prefer
+    // the live Dodo price, and checkout always charges Dodo's price. Matches
+    // the $249.99/mo verified against Dodo via previewChangePlan (#4634).
+    priceCents: 24999,
     billingPeriod: "monthly",
     tierGroup: "api_business",
     features: API_BUSINESS_FEATURES,
@@ -237,10 +240,15 @@ export const PRODUCT_CATALOG: Record<string, CatalogEntry> = {
       "Priority support",
       "XLSX exports",
     ],
-    selfServe: false,
+    // Published + self-serve since #4945 (bet B4): the tier existed in the
+    // billing system but was invisible on every pricing surface and had
+    // zero customers. Starter→Business upgrades for existing subscribers
+    // ride the Dodo collection/portal path (#4634/#4672); this flag set
+    // covers NEW-customer checkout and pricing-page visibility.
+    selfServe: true,
     highlighted: false,
-    currentForCheckout: false,
-    publicVisible: false,
+    currentForCheckout: true,
+    publicVisible: true,
   },
 
   enterprise: {

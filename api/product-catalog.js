@@ -64,6 +64,12 @@ const TIER_CONFIG = {
     features: ['REST API + official SDKs (npm, PyPI, RubyGems, Go)', 'Real-time data streams', '60 requests/minute', '1,000 requests/day included', 'Webhook notifications', 'Custom data exports'],
     highlighted: false,
   },
+  api_business: {
+    name: 'API Business',
+    description: 'High-volume API for teams',
+    features: ['Everything in API Starter', '300 requests/minute', '10,000 requests/day included', 'Priority support', 'XLSX exports'],
+    highlighted: false,
+  },
   enterprise: {
     name: 'Enterprise',
     description: 'Custom solutions for organizations',
@@ -75,7 +81,7 @@ const TIER_CONFIG = {
 };
 
 // Tier groups shown on the /pro page (ordered)
-const PUBLIC_TIER_GROUPS = ['free', 'pro', 'api_starter', 'enterprise'];
+const PUBLIC_TIER_GROUPS = ['free', 'pro', 'api_starter', 'api_business', 'enterprise'];
 
 function json(body, status, cors, cacheControl, source) {
   return new Response(JSON.stringify(body), {

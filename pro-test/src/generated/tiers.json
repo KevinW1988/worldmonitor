@@ -53,6 +53,21 @@
     "highlighted": false
   },
   {
+    "name": "API Business",
+    "localeKey": "apiBusiness",
+    "monthlyPrice": 249.99,
+    "description": "High-volume API for teams",
+    "features": [
+      "Everything in API Starter",
+      "300 requests/minute",
+      "10,000 requests/day included",
+      "Priority support",
+      "XLSX exports"
+    ],
+    "monthlyProductId": "pdt_0Nbttg7NuOJrhbyBGCius",
+    "highlighted": false
+  },
+  {
     "name": "Enterprise",
     "localeKey": "enterprise",
     "price": null,

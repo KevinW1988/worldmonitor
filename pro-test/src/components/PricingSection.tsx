@@ -247,7 +247,9 @@ export function PricingSection({ refCode }: { refCode?: string }) {
         </div>
 
         {/* Tier cards grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* 5 tiers since API Business was published (#4945): 2-up on tablet,
+            3+2 on laptop, all five across on desktop. */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
           {TIERS.map((tier, i) => {
             const price = formatPrice(tier, billing);
             const localized = localizeTier(tier);
