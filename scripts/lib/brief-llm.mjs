@@ -321,7 +321,7 @@ export function parseStoryDescription(text, headline) {
  */
 export async function generateStoryDescription(story, deps) {
   // Shares hashBriefStory() with whyMatters — the key prefix
-  // (`brief:llm:description:v3:`) is what separates the two cache
+  // (`brief:llm:description:v4:`) is what separates the two cache
   // namespaces; the material is the six fields including description.
   // Bumped v1→v2 on 2026-04-24 alongside the RSS-description fix so
   // cached pre-grounding output (hallucinated named actors from

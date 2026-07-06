@@ -1709,7 +1709,7 @@ describe('generateStoryDescription — sanitisation + prefix bump (U5)', () => {
     );
   });
 
-  it('writes cache under the v2 prefix (bumped 2026-04-24)', async () => {
+  it('writes cache under the v4 prefix (#4944 U4 model-cutover bump)', async () => {
     const setCalls = [];
     const cache = {
       async cacheGet() { return null; },
@@ -1744,54 +1744,54 @@ describe('generateStoryDescription — sanitisation + prefix bump (U5)', () => {
       { ...cache, callLLM: async () => fresh },
     );
     assert.strictEqual(out, fresh, 'legacy v1/v2 rows must NOT be served post-bump');
-    // And the freshly-written row lands under v3.
-    const v3Keys = [...store.keys()].filter((k) => k.startsWith('brief:llm:description:v4:'));
-    assert.strictEqual(v3Keys.length, 1);
+    // And the freshly-written row lands under v4.
+    const v4Keys = [...store.keys()].filter((k) => k.startsWith('brief:llm:description:v4:'));
+    assert.strictEqual(v4Keys.length, 1);
   });
 });
 
-// ── generateWhyMatters — v8 endpoint-cache cross-read (#4914) ──────────────
+// ── generateWhyMatters — v9 endpoint-cache cross-read (#4914) ──────────────
 //
 // The analyst endpoint (api/internal/brief-why-matters.ts) caches its
 // envelope at brief:llm:whymatters:v9:{hashBriefStory} — the SAME story
-// identity as the cron's legacy v5 namespace. When the endpoint CALL fails
+// identity as the cron's fallback v6 namespace. When the endpoint CALL fails
 // transiently, the envelope may still be sitting in Redis; the fallback
-// must read it before paying a direct-Gemini generation.
+// must read it before paying a direct-chain generation.
 
-describe('generateWhyMatters — v8 endpoint-cache cross-read (#4914)', () => {
-  const V8_PROSE = 'Closure of the Strait of Hormuz would freeze a fifth of seaborne crude and force allied navies to respond.';
+describe('generateWhyMatters — v9 endpoint-cache cross-read (#4914)', () => {
+  const ANALYST_PROSE = 'Closure of the Strait of Hormuz would freeze a fifth of seaborne crude and force allied navies to respond.';
 
-  async function seedV8(cache, s, envelopeOverrides = {}) {
+  async function seedAnalystEnvelope(cache, s, envelopeOverrides = {}) {
     const hash = await hashBriefStory(s);
     cache.store.set(`brief:llm:whymatters:v9:${hash}`, {
-      whyMatters: V8_PROSE,
+      whyMatters: ANALYST_PROSE,
       producedBy: 'analyst',
       ...envelopeOverrides,
     });
     return hash;
   }
 
-  it('reuses the v8 envelope when the analyst endpoint call fails — no paid LLM call', async () => {
+  it('reuses the v9 envelope when the analyst endpoint call fails — no paid LLM call', async () => {
     const cache = makeCache();
     const s = story();
-    await seedV8(cache, s);
-    const llm = makeLLM(() => { throw new Error('must not pay direct-Gemini when v8 is warm'); });
+    await seedAnalystEnvelope(cache, s);
+    const llm = makeLLM(() => { throw new Error('must not pay the direct chain when v9 is warm'); });
     const out = await generateWhyMatters(s, {
       ...cache,
       callLLM: llm.callLLM,
       callAnalystWhyMatters: async () => { throw new Error('endpoint down'); },
     });
-    assert.equal(out, V8_PROSE);
-    assert.equal(llm.calls.length, 0, 'v8 hit must short-circuit the legacy chain');
+    assert.equal(out, ANALYST_PROSE);
+    assert.equal(llm.calls.length, 0, 'v9 hit must short-circuit the fallback chain');
   });
 
-  it('reuses the v8 envelope when no analyst endpoint is configured at all', async () => {
+  it('reuses the v9 envelope when no analyst endpoint is configured at all', async () => {
     const cache = makeCache();
     const s = story();
-    await seedV8(cache, s);
+    await seedAnalystEnvelope(cache, s);
     const llm = makeLLM(() => { throw new Error('must not pay'); });
     const out = await generateWhyMatters(s, { ...cache, callLLM: llm.callLLM });
-    assert.equal(out, V8_PROSE);
+    assert.equal(out, ANALYST_PROSE);
     assert.equal(llm.calls.length, 0);
   });
 
@@ -1809,19 +1809,19 @@ describe('generateWhyMatters — v8 endpoint-cache cross-read (#4914)', () => {
   it('v8 sensitivity-stub prose is rejected, not served', async () => {
     const cache = makeCache();
     const s = story();
-    await seedV8(cache, s, { whyMatters: 'Story flagged by your sensitivity settings. Open for context and details.' });
+    await seedAnalystEnvelope(cache, s, { whyMatters: 'Story flagged by your sensitivity settings. Open for context and details.' });
     const llm = makeLLM('Closure of the Strait of Hormuz would spike oil prices globally.');
     const out = await generateWhyMatters(s, { ...cache, callLLM: llm.callLLM });
     assert.equal(out, 'Closure of the Strait of Hormuz would spike oil prices globally.');
     assert.equal(llm.calls.length, 1);
   });
 
-  it('v8 read is read-only — the legacy path must not copy into or overwrite the v8 namespace', async () => {
+  it('v9 read is read-only — the fallback path must not copy into or overwrite the v9 namespace', async () => {
     const cache = makeCache();
     const s = story();
     const llm = makeLLM('Closure of the Strait of Hormuz would spike oil prices globally.');
     await generateWhyMatters(s, { ...cache, callLLM: llm.callLLM });
-    const v8Keys = [...cache.store.keys()].filter((k) => k.startsWith('brief:llm:whymatters:v9:'));
-    assert.equal(v8Keys.length, 0, 'legacy single-sentence output must stay in the v5 namespace');
+    const v9Keys = [...cache.store.keys()].filter((k) => k.startsWith('brief:llm:whymatters:v9:'));
+    assert.equal(v9Keys.length, 0, 'fallback single-sentence output must stay in the v6 namespace');
   });
 });
