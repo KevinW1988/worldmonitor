@@ -1163,7 +1163,7 @@ function detectSupplyChainScenarios(inputs) {
 
     const aisGaps = anomalies.filter(a =>
       (a.type === 'ais_gaps' || a.type === 'ais_gap') &&
-      (a.region || a.zone || '').toLowerCase().includes(route.toLowerCase()),
+      textIncludesTerm((a.region || a.zone || '').toLowerCase(), route.toLowerCase()),
     );
     if (aisGaps.length > 0) {
       signals.push({ type: 'ais_gap', value: `${aisGaps.length} AIS gap anomalies near ${route}`, weight: 0.3 });
@@ -1171,7 +1171,7 @@ function detectSupplyChainScenarios(inputs) {
     }
 
     const nearbyJam = jamming.filter(j =>
-      (j.region || j.zone || j.name || '').toLowerCase().includes(route.toLowerCase()),
+      textIncludesTerm((j.region || j.zone || j.name || '').toLowerCase(), route.toLowerCase()),
     );
     if (nearbyJam.length > 0) {
       signals.push({ type: 'gps_jamming', value: `GPS interference near ${route}`, weight: 0.2 });
@@ -1643,7 +1643,7 @@ function detectPoliticalScenarios(inputs) {
 
     const protestAnomalies = anomalies.filter(a =>
       (a.type === 'protest' || a.type === 'unrest') &&
-      (a.country || a.region || '').toLowerCase().includes(countryName),
+      textIncludesTerm((a.country || a.region || '').toLowerCase(), countryName),
     );
     if (protestAnomalies.length > 0) {
       const maxZ = Math.max(...protestAnomalies.map(a => a.zScore || a.z_score || 0));
@@ -1711,7 +1711,7 @@ function detectMilitaryScenarios(inputs) {
 
     const milFlights = anomalies.filter(a =>
       (a.type === 'military_flights' || a.type === 'military') &&
-      [region, theaterLabel, theaterId].some((part) => part && (a.region || a.theater || '').toLowerCase().includes(part.toLowerCase())),
+      [region, theaterLabel, theaterId].some((part) => part && textIncludesTerm((a.region || a.theater || '').toLowerCase(), part.toLowerCase())),
     );
     if (milFlights.length > 0) {
       const maxZ = Math.max(...milFlights.map(a => a.zScore || a.z_score || 0));
@@ -1823,7 +1823,7 @@ function detectInfraScenarios(inputs) {
     let sourceCount = 1;
 
     const relatedCyber = cyber.filter(t =>
-      (t.country || t.target || t.region || '').toLowerCase().includes(countryLower),
+      textIncludesTerm((t.country || t.target || t.region || '').toLowerCase(), countryLower),
     );
     if (relatedCyber.length > 0) {
       signals.push({ type: 'cyber', value: `${relatedCyber.length} cyber threats targeting ${country}`, weight: 0.3 });
@@ -1831,7 +1831,7 @@ function detectInfraScenarios(inputs) {
     }
 
     const nearbyJam = jamming.filter(j =>
-      (j.country || j.region || j.name || '').toLowerCase().includes(countryLower),
+      textIncludesTerm((j.country || j.region || j.name || '').toLowerCase(), countryLower),
     );
     if (nearbyJam.length > 0) {
       signals.push({ type: 'gps_jamming', value: `GPS interference in ${country}`, weight: 0.2 });
@@ -2057,6 +2057,23 @@ function tokenizeText(text) {
     .filter(token => token.length >= 3);
 }
 
+// Word-boundary term matching to prevent substring false positives
+// (Mali matching Somalia, Niger matching Nigeria, Iran matching Tirana).
+// Boundary class mirrors the tokenizeText delimiter so both matchers agree.
+const TERM_MATCH_REGEX_CACHE_MAX = 4000;
+const termMatchRegexCache = new Map();
+function textIncludesTerm(lowerText, lowerTerm) {
+  if (!lowerText || !lowerTerm) return false;
+  let re = termMatchRegexCache.get(lowerTerm);
+  if (!re) {
+    if (termMatchRegexCache.size >= TERM_MATCH_REGEX_CACHE_MAX) termMatchRegexCache.clear();
+    const escaped = lowerTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    re = new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`);
+    termMatchRegexCache.set(lowerTerm, re);
+  }
+  return re.test(lowerText);
+}
+
 function uniqueLowerTerms(terms) {
   return [...new Set((terms || [])
     .map(term => (term || '').toLowerCase().trim())
@@ -2069,7 +2086,7 @@ function countTermMatches(text, terms) {
   let score = 0;
   for (const term of uniqueLowerTerms(terms)) {
     if (term.length < 3) continue;
-    if (!lower.includes(term)) continue;
+    if (!textIncludesTerm(lower, term)) continue;
     hits += 1;
     score += term.length > 8 ? 4 : term.length > 5 ? 3 : 2;
   }
@@ -2137,7 +2154,7 @@ function computeMarketMatchScore(pred, marketTitle, regionTerms, options = {}) {
   let score = regionScore + (tagOverlap ? 2 : 0) - (tagMismatch ? 5 : 0);
   let domainHits = 0;
   for (const hint of getDomainTerms(pred.domain)) {
-    if (lower.includes(hint)) {
+    if (textIncludesTerm(lower, hint)) {
       domainHits += 1;
       score += 1;
     }
@@ -2145,7 +2162,7 @@ function computeMarketMatchScore(pred, marketTitle, regionTerms, options = {}) {
   let titleHits = 0;
   const titleTokens = options.titleTokens || extractMeaningfulTokens(pred.title, regionTerms);
   for (const token of titleTokens) {
-    if (lower.includes(token)) {
+    if (textIncludesTerm(lower, token)) {
       titleHits += 1;
       score += 2;
     }
