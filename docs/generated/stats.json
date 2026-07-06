@@ -57,6 +57,7 @@
     "feed-validation.yml",
     "lint-code.yml",
     "lint.yml",
+    "mcp-live-smoke.yml",
     "pro-bundle-freshness.yml",
     "proto-check.yml",
     "publish-cli.yml",
@@ -68,7 +69,7 @@
     "test.yml",
     "typecheck.yml"
   ],
-  "workflowCount": 19,
+  "workflowCount": 20,
   "freshnessSources": 35,
   "freshnessRequiredForRisk": 2,
   "feedDefinitions": 567,
