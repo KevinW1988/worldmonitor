@@ -361,15 +361,17 @@ export const sendSubscriptionEmails = internalAction({
 // re-validated against live state (still on_hold, same episode, recipient
 // not suppressed, step not already sent) so recovery/replay races are safe.
 //
-// cancelled: one winback email ~30 days after cancelledAt, only once access
-// has actually ended (currentPeriodEnd in the past) and only if the user has
-// no other live subscription. Window-capped at 60 days so the first deploy
-// doesn't mass-mail historic cancellations.
+// cancelled: one winback email ~30 days after ACCESS ends (currentPeriodEnd
+// — not cancelledAt: an annual who cancels months early must still get it
+// once access actually lapses), and only if the user has no other covering
+// subscription. Window-capped at 60 days so the first deploy doesn't
+// mass-mail historic churn.
 // ===========================================================================
 
 const DAY_MS = 86_400_000;
 export const DUNNING_DAY3_AGE_MS = 3 * DAY_MS;
 export const DUNNING_DAY7_AGE_MS = 7 * DAY_MS;
+// Winback window bounds, measured from currentPeriodEnd (access end).
 export const WINBACK_MIN_AGE_MS = 30 * DAY_MS;
 export const WINBACK_MAX_AGE_MS = 60 * DAY_MS;
 
@@ -411,7 +413,13 @@ export const getDunningContext = internalQuery({
       email = customer?.email ?? "";
     }
 
-    // Winback guard: skip users who already came back on any live sub.
+    // Winback guard: skip users who are still covered by any OTHER sub.
+    // "Live" mirrors the entitlement recompute's coverage definition:
+    // active, on_hold, or cancelled-but-paid-through — a user with an
+    // ended monthly sub plus a cancelled annual that runs another 8 months
+    // is still entitled and must NOT get "your access has ended" (PR #4935
+    // review round 2, finding 2).
+    const now = Date.now();
     const siblingSubs = await ctx.db
       .query("subscriptions")
       .withIndex("by_userId", (q) => q.eq("userId", sub.userId))
@@ -419,7 +427,9 @@ export const getDunningContext = internalQuery({
     const hasLiveSub = siblingSubs.some(
       (s) =>
         s.dodoSubscriptionId !== sub.dodoSubscriptionId &&
-        (s.status === "active" || s.status === "on_hold"),
+        (s.status === "active" ||
+          s.status === "on_hold" ||
+          (s.status === "cancelled" && s.currentPeriodEnd > now)),
     );
 
     return {
@@ -590,8 +600,13 @@ export const sendDunningEmail = internalAction({
 
     if (args.step === "winback_day30") {
       // Winback only for genuinely-gone users: still cancelled, paid period
-      // actually over, and no other live subscription on the account.
+      // actually over, and no other covering subscription on the account.
       if (sub.status !== "cancelled") return { sent: false, reason: "not_cancelled" as const };
+      // Same stale-episode discipline as dunning (PR #4935 review round 2,
+      // finding 1): a pending winback scheduled for cancellation T1 must not
+      // fire after the row moved to a different cancellation episode T2 —
+      // the T2 window gets its own ledger entry and its own single send.
+      if (sub.cancelledAt !== args.episodeAt) return { sent: false, reason: "stale_episode" as const };
       if (sub.currentPeriodEnd > Date.now()) return { sent: false, reason: "still_entitled" as const };
       if (sub.hasLiveSub) return { sent: false, reason: "resubscribed" as const };
     } else {
@@ -689,21 +704,26 @@ export const runDunningScan = internalMutation({
     // Range-read ONLY the winback window via the compound index — cancelled
     // is an accumulating terminal status, and a bare collect() over it would
     // eventually blow Convex's per-transaction read cap and kill the whole
-    // scan (PR #4935 review finding 2). Rows without cancelledAt are legacy
-    // (all older than the window) and correctly fall outside the range.
+    // scan (PR #4935 review finding 2). The window is measured from
+    // currentPeriodEnd (ACCESS end), not cancelledAt, so annual subscribers
+    // who cancel months before expiry become eligible once their access
+    // actually lapses instead of never (review round 2, finding 3).
     const cancelled = await ctx.db
       .query("subscriptions")
-      .withIndex("by_status_cancelledAt", (q) =>
+      .withIndex("by_status_currentPeriodEnd", (q) =>
         q
           .eq("status", "cancelled")
-          .gte("cancelledAt", now - WINBACK_MAX_AGE_MS)
-          .lte("cancelledAt", now - WINBACK_MIN_AGE_MS),
+          .gte("currentPeriodEnd", now - WINBACK_MAX_AGE_MS)
+          .lte("currentPeriodEnd", now - WINBACK_MIN_AGE_MS),
       )
       .collect();
     for (const sub of cancelled) {
-      const cancelledAt = sub.cancelledAt ?? sub.updatedAt;
-      if (sub.currentPeriodEnd > now) continue;
-      due.push({ dodoSubscriptionId: sub.dodoSubscriptionId, step: "winback_day30", episodeAt: cancelledAt });
+      // cancelledAt is the episode identity (matches the send action's
+      // stale-episode guard). Rows without it are legacy pre-cancelledAt
+      // data with no stable episode key — skip rather than anchor on the
+      // drift-prone updatedAt.
+      if (sub.cancelledAt === undefined) continue;
+      due.push({ dodoSubscriptionId: sub.dodoSubscriptionId, step: "winback_day30", episodeAt: sub.cancelledAt });
     }
 
     let scheduled = 0;

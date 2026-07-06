@@ -362,15 +362,15 @@ describe("runDunningScan windows", () => {
 });
 
 describe("winback", () => {
-  test("cancelled 35 days ago with access ended gets exactly one winback", async () => {
+  test("access ended 35 days ago gets exactly one winback", async () => {
     vi.useFakeTimers();
     process.env.RESEND_API_KEY = "re_test";
     const fetchMock = mockResend();
     const t = convexTest(schema, modules);
     await seedSub(t, {
       status: "cancelled",
-      cancelledAt: Date.now() - (WINBACK_MIN_AGE_MS + 5 * DAY_MS),
-      currentPeriodEnd: Date.now() - 5 * DAY_MS,
+      cancelledAt: Date.now() - 40 * DAY_MS,
+      currentPeriodEnd: Date.now() - (WINBACK_MIN_AGE_MS + 5 * DAY_MS),
     });
 
     await t.mutation(internal.payments.subscriptionEmails.runDunningScan, {});
@@ -381,6 +381,76 @@ describe("winback", () => {
 
     const again = await t.mutation(internal.payments.subscriptionEmails.runDunningScan, {});
     expect(again.scheduled).toBe(0);
+  });
+
+  test("annual who cancelled months early gets the winback once access lapses (round-2 F3)", async () => {
+    vi.useFakeTimers();
+    process.env.RESEND_API_KEY = "re_test";
+    const fetchMock = mockResend();
+    const t = convexTest(schema, modules);
+    // Cancelled 8 months ago, but the paid annual period only lapsed 32 days
+    // ago. A cancelledAt-keyed window would NEVER select this row (paid-
+    // through inside it, outside it afterwards); the access-end window must.
+    await seedSub(t, {
+      status: "cancelled",
+      cancelledAt: Date.now() - 240 * DAY_MS,
+      currentPeriodEnd: Date.now() - 32 * DAY_MS,
+    });
+
+    await t.mutation(internal.payments.subscriptionEmails.runDunningScan, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const sends = resendSends(fetchMock);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.subject).toContain("access has ended");
+  });
+
+  test("pending winback for a superseded cancellation episode is dropped (round-2 F1)", async () => {
+    process.env.RESEND_API_KEY = "re_test";
+    const fetchMock = mockResend();
+    const t = convexTest(schema, modules);
+    const currentEpisode = Date.now() - 40 * DAY_MS;
+    const staleEpisode = Date.now() - 100 * DAY_MS;
+    await seedSub(t, {
+      status: "cancelled",
+      cancelledAt: currentEpisode,
+      currentPeriodEnd: Date.now() - 35 * DAY_MS,
+    });
+
+    const result = await t.action(internal.payments.subscriptionEmails.sendDunningEmail, {
+      dodoSubscriptionId: SUB_ID,
+      step: "winback_day30",
+      episodeAt: staleEpisode,
+    });
+    expect(result).toEqual({ sent: false, reason: "stale_episode" });
+    expect(resendSends(fetchMock)).toHaveLength(0);
+  });
+
+  test("cancelled-but-paid-through sibling still counts as covered (round-2 F2)", async () => {
+    process.env.RESEND_API_KEY = "re_test";
+    const fetchMock = mockResend();
+    const t = convexTest(schema, modules);
+    const cancelledAt = Date.now() - 40 * DAY_MS;
+    await seedSub(t, {
+      status: "cancelled",
+      cancelledAt,
+      currentPeriodEnd: Date.now() - 35 * DAY_MS,
+    });
+    // Sibling annual: cancelled, but paid through for months — the user is
+    // still entitled, so "your access has ended" must not go out.
+    await seedSub(t, {
+      dodoSubscriptionId: "sub_annual_paid_through",
+      status: "cancelled",
+      cancelledAt: Date.now() - 10 * DAY_MS,
+      currentPeriodEnd: Date.now() + 200 * DAY_MS,
+    });
+
+    const result = await t.action(internal.payments.subscriptionEmails.sendDunningEmail, {
+      dodoSubscriptionId: SUB_ID,
+      step: "winback_day30",
+      episodeAt: cancelledAt,
+    });
+    expect(result).toEqual({ sent: false, reason: "resubscribed" });
+    expect(resendSends(fetchMock)).toHaveLength(0);
   });
 
   test("still-entitled cancellation (annual paid through) is not winback-emailed", async () => {

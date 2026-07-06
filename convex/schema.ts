@@ -558,11 +558,13 @@ export default defineSchema({
     // it grows with lifetime churn, so a bare by_status collect() would
     // eventually hit Convex's per-transaction read cap and kill the whole
     // daily scan (PR #4935 review finding 2). This compound index lets the
-    // scan range-read only the 30–60-day cancelledAt window. Legacy rows
-    // without cancelledAt sort below every number and fall outside the
-    // range — they are all older than the window by construction, so
-    // exclusion is correct.
-    .index("by_status_cancelledAt", ["status", "cancelledAt"]),
+    // scan range-read only a bounded window. Keyed on currentPeriodEnd
+    // (ACCESS end), not cancelledAt: an annual subscriber who cancels
+    // months before expiry would otherwise be paid-through during the
+    // post-cancel window and outside it once access actually ends — never
+    // winback-eligible (review round 2, finding 3). The winback email says
+    // "your access ended ~a month ago", so access end is the right clock.
+    .index("by_status_currentPeriodEnd", ["status", "currentPeriodEnd"]),
 
   // Dunning/winback send ledger (#4932): one row per email step actually
   // delivered for a given subscription episode. `episodeAt` is the on_hold
