@@ -1498,7 +1498,9 @@ async function buildDigest(variant: string, lang: string): Promise<ListFeedDiges
     // ledgers for known variants and well-formed 2-letter langs so a caller
     // spraying arbitrary values cannot inflate the keyspace.
     if (VARIANT_FEEDS[variant] && /^[a-z]{2}$/.test(lang)) {
-      void setCachedJson(`news:coverage-ledger:v1:${variant}:${lang}`, ledger, 7200).catch((err: unknown) =>
+      // #4927 review P2: awaited — a fire-and-forget write can be killed
+      // when the response finishes before the side write lands.
+      await setCachedJson(`news:coverage-ledger:v1:${variant}:${lang}`, ledger, 7200).catch((err: unknown) =>
         console.warn('[digest] coverage-ledger write failed:', err),
       );
     }

@@ -364,14 +364,6 @@ async function main() {
   console.log(`Summary: ${ok.length} OK, ${stale.length} stale, ${dead.length} dead, ${empty.length} empty` +
     (skipped.length ? `, ${skipped.length} skipped` : ''));
 
-  // #4920: publish per-feed health + silent-zero streaks to Redis when
-  // credentials are present (the daily GitHub Actions run passes them as
-  // secrets; local/PR runs without creds skip silently). Best-effort: a
-  // Redis outage must not fail feed validation.
-  await publishFeedHealth(results).catch((err) =>
-    console.warn(`WARN: feed-health publish failed: ${err.message}`),
-  );
-
   // Exit policy:
   //   HARD-FAIL on config/SSRF-guard drift — these are bugs the maintainer can fix.
   //     Reasons enumerated in CONFIG_DRIFT_REASONS (top of file). Both the throwing
@@ -398,6 +390,16 @@ async function main() {
     );
     process.exit(1);
   }
+
+  // #4920: publish per-feed health + silent-zero streaks to Redis when
+  // credentials are present (the daily GitHub Actions run passes them as
+  // secrets; local/PR runs without creds skip silently). Best-effort: a
+  // Redis outage must not fail feed validation. Deliberately AFTER the
+  // config-drift hard-fail (#4927 review P3): a guardrail-failing run must
+  // not refresh health metadata first and mask the failure as fresh/OK.
+  await publishFeedHealth(results).catch((err) =>
+    console.warn(`WARN: feed-health publish failed: ${err.message}`),
+  );
 
   if (stale.length || thirdPartyDead.length || empty.length) {
     console.warn(

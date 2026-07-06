@@ -493,6 +493,13 @@ const ON_DEMAND_KEYS = new Set([
   // chronic LLM-provider failures must surface as CRIT.
   'simulationPackageLatest', // written by writeSimulationPackage after deep forecast runs; only present after first successful deep run
   'simulationOutcomeLatest', // written by writeSimulationOutcome after simulation runs; only present after first successful simulation
+  // #4927 review P1: activation-gated on the operator adding UPSTASH_* as GH
+  // Actions secrets — the publishers skip silently without them, so a
+  // never-activated key must read as soft EMPTY_ON_DEMAND, not EMPTY/CRIT,
+  // while the workflow stays green. Once the first publish lands, seed-meta
+  // staleness (maxStaleMin 2880) enforces freshness strictly.
+  'newsFeedHealth',
+  'newsRecallBenchmark',
   'newsThreatSummary', // relay classify loop — only written when mergedByCountry has entries; absent on quiet news periods
   'resilienceRanking', // on-demand RPC cache populated after ranking requests; missing before first Pro use is expected
   'recoveryFiscalSpace', 'recoveryReserveAdequacy', 'recoveryExternalDebt',

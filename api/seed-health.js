@@ -30,8 +30,12 @@ const SEED_DOMAINS = {
   // #4920 completeness measurement — both run in the daily feed-validation
   // GitHub Actions workflow (00:00 UTC), not Railway. 1440-min cadence;
   // classifier stales at intervalMin*2 = one fully missed day.
-  'news:feed-health':         { key: 'seed-meta:news:feed-health',         intervalMin: 1440 },
-  'news:recall-benchmark':    { key: 'seed-meta:news:recall-benchmark',    intervalMin: 1440 },
+  // activationGated (#4927 review P1): published from GH Actions only when
+  // the operator has added the UPSTASH secrets; 'missing' must read as
+  // pending-activation (healthy) until the first publish, then normal
+  // staleness rules apply.
+  'news:feed-health':         { key: 'seed-meta:news:feed-health',         intervalMin: 1440, activationGated: true },
+  'news:recall-benchmark':    { key: 'seed-meta:news:recall-benchmark',    intervalMin: 1440, activationGated: true },
   // Phase 2 — Parameterized endpoints
   'unrest:events':            { key: 'seed-meta:unrest:events',            intervalMin: 15 },
   'cyber:threats':            { key: 'seed-meta:cyber:threats',            intervalMin: 240 },
@@ -326,6 +330,12 @@ export default async function handler(req) {
     const maxStalenessMs = cfg.intervalMin * 2 * 60 * 1000;
 
     if (!meta) {
+      if (cfg.activationGated) {
+        // Never seeded AND the seeder is operator-activation-gated: healthy
+        // pending state, not an alarm (#4927 review P1).
+        seeds[domain] = { status: 'pending-activation', fetchedAt: null, recordCount: null, stale: false };
+        continue;
+      }
       seeds[domain] = { status: 'missing', fetchedAt: null, recordCount: null, stale: true };
       if (cfg.minRecordCount != null) seeds[domain].minRecordCount = cfg.minRecordCount;
       missingCount++;

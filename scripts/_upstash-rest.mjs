@@ -21,7 +21,11 @@ export function getOptionalUpstashCreds() {
 export async function upstashCommand(creds, command) {
   const resp = await fetch(creds.restUrl, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${creds.token}`, 'Content-Type': 'application/json' },
+    headers: {
+      Authorization: `Bearer ${creds.token}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'worldmonitor-ops/1.0 (+https://worldmonitor.app)',
+    },
     body: JSON.stringify(command),
     signal: AbortSignal.timeout(15_000),
   });

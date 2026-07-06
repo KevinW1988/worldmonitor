@@ -296,3 +296,28 @@ describe('feed-health streak continuity (#4927 external review)', () => {
     }
   });
 });
+
+describe('selection attribution: same-source overflow (#4927 re-review)', () => {
+  it('REGRESSION: candidates past maxCount are cap-attributed when their source already hit the cap', () => {
+    const mk = (title, source) => ({
+      primaryTitle: title, primarySource: source, primaryLink: `https://x/${title}`,
+      pubDate: new Date().toISOString(), sources: [source, 'Wire'], isAlert: true, tier: 1,
+    });
+    // 3 selected from SameSource (hits MAX_PER_SOURCE), then 2 distinct fill
+    // maxCount=5; then: 1 more SameSource (cap drop even though selection is
+    // full) + 2 distinct (genuine overflow).
+    const clusters = [
+      mk('s1', 'SameSource'), mk('s2', 'SameSource'), mk('s3', 'SameSource'),
+      mk('d1', 'A'), mk('d2', 'B'),
+      mk('s4', 'SameSource'),
+      mk('d3', 'C'), mk('d4', 'D'),
+    ];
+    const stats = {};
+    const selected = selectTopStories(clusters, 5, stats);
+    assert.equal(selected.length, 5);
+    assert.equal(stats.sourceCapDropped, 1, 's4 is a source-cap drop, not overflow');
+    assert.equal(stats.overflowDropped, 2, 'only genuinely rankable candidates count as overflow');
+    assert.equal(stats.admissibilityDropped + stats.sourceCapDropped + stats.overflowDropped + selected.length, clusters.length,
+      'every considered cluster is attributed exactly once');
+  });
+});

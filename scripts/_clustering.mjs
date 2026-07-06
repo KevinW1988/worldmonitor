@@ -330,24 +330,34 @@ export function selectTopStories(clusters, maxCount = 8, stats) {
   const sourceCount = new Map();
   const MAX_PER_SOURCE = 3;
   let sourceCapDropped = 0;
+  let overflowDropped = 0;
 
+  // #4927 review P2: classify EVERY admissible candidate — breaking at
+  // maxCount lumped later same-source candidates into overflow arithmetic
+  // even though the source cap would have rejected them regardless of
+  // room. Cap-first attribution: a candidate whose source already hit the
+  // per-source cap is a sourceCap drop; only genuinely rankable candidates
+  // count as overflow.
   for (const { cluster, score, effectiveScore } of admissible) {
-    if (selected.length >= maxCount) break;
     const source = cluster.primarySource;
     const count = sourceCount.get(source) || 0;
-    if (count < MAX_PER_SOURCE) {
-      selected.push({ ...cluster, importanceScore: score, effectiveImportanceScore: effectiveScore });
-      sourceCount.set(source, count + 1);
-    } else {
+    if (count >= MAX_PER_SOURCE) {
       sourceCapDropped++;
+      continue;
     }
+    if (selected.length >= maxCount) {
+      overflowDropped++;
+      continue;
+    }
+    selected.push({ ...cluster, importanceScore: score, effectiveImportanceScore: effectiveScore });
+    sourceCount.set(source, count + 1);
   }
 
   if (stats && typeof stats === 'object') {
     stats.considered = clusters.length;
     stats.admissibilityDropped = admissibilityDropped;
     stats.sourceCapDropped = sourceCapDropped;
-    stats.overflowDropped = Math.max(0, admissible.length - selected.length - sourceCapDropped);
+    stats.overflowDropped = overflowDropped;
   }
 
   return selected;

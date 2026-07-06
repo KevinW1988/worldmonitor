@@ -58,6 +58,18 @@ jobs:
       # per-feed health + silent-zero streaks (news:feed-health:v1) and the
       # GDELT recall benchmark (news:recall-benchmark:v1). Without secrets
       # both publishers skip silently — validation output is unchanged.
+      # #4927 review P1: a silent skip must still be VISIBLE on the run —
+      # otherwise green scheduled runs mask never-activated health
+      # publishing (the health endpoints activation-gate these keys, but an
+      # operator scanning workflow runs should see the gap too).
+      - name: Warn when health publishing is not activated
+        env:
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+        run: |
+          if [ -z "$UPSTASH_REDIS_REST_URL" ] || [ -z "$UPSTASH_REDIS_REST_TOKEN" ]; then
+            echo "::warning title=feed-health publishing skipped::UPSTASH_REDIS_REST_URL/TOKEN are not configured as repo secrets — news:feed-health:v1 and news:recall-benchmark:v1 will not be published (health endpoints show these as pending-activation)."
+          fi
       - run: npm run test:feeds:ci
         env:
           UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
