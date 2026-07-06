@@ -825,6 +825,18 @@ function forecastId(domain, region, title) {
   return `fc-${domain}-${hash}`;
 }
 
+// Stable id for forecasts whose titles embed run-varying data (military
+// dominantCountry/surgeType, state-derived cluster labels). The id must key
+// on the semantic slot, not the display title, or the same evolving
+// situation splits across ids between runs — breaking trend continuity and
+// outcome matching.
+function forecastIdFromKey(domain, slotKey) {
+  const hash = crypto.createHash('sha256')
+    .update(`${domain}:${slotKey}`)
+    .digest('hex').slice(0, 8);
+  return `fc-${domain}-${hash}`;
+}
+
 function normalize(value, min, max) {
   if (max <= min) return 0;
   return Math.max(0, Math.min(1, (value - min) / (max - min)));
@@ -1452,6 +1464,7 @@ function buildStateDerivedForecast(stateUnit, domain, bucket, candidate, marketC
     domain === 'supply_chain' ? '7d' : '30d',
     signals,
   );
+  prediction.id = forecastIdFromKey(domain, `state:${bucket.id}:${stateUnit?.dominantRegion || stateUnit?.regions?.[0] || ''}`);
   prediction.generationOrigin = 'state_derived';
   prediction.feedSummary = buildStateDerivedFeedSummary(
     domain,
@@ -1604,10 +1617,18 @@ function deriveStateDrivenForecasts({
     }
   }
 
+  // Slot ids make same (domain, bucket, dominantRegion) forecasts share an id
+  // regardless of cluster label — keep only the best-ranked one per id.
+  const seenSlotIds = new Set();
   return crossDeduped
     .sort((a, b) => (Number(a.stateDerivedBackfill) - Number(b.stateDerivedBackfill))
       || (b.probability * b.confidence) - (a.probability * a.confidence)
-      || a.title.localeCompare(b.title));
+      || a.title.localeCompare(b.title))
+    .filter((pred) => {
+      if (seenSlotIds.has(pred.id)) return false;
+      seenSlotIds.add(pred.id);
+      return true;
+    });
 }
 
 function detectPoliticalScenarios(inputs) {
@@ -1787,11 +1808,13 @@ function detectMilitaryScenarios(inputs) {
       ? buildMilitaryForecastTitle(theaterId, theaterLabel, highestSurge)
       : `Military posture escalation: ${region}`;
 
-    predictions.push(makePrediction(
+    const milPred = makePrediction(
       'military', region,
       title,
       prob, confidence, '7d', signals,
-    ));
+    );
+    milPred.id = forecastIdFromKey('military', `theater:${theaterId}`);
+    predictions.push(milPred);
   }
 
   return predictions;
@@ -17665,6 +17688,8 @@ export {
   PRIOR_KEY,
   HISTORY_KEY,
   HISTORY_MAX_RUNS,
+  forecastIdFromKey,
+  buildStateDerivedForecast,
   HISTORY_MAX_FORECASTS,
   TRACE_LATEST_KEY,
   TRACE_RUNS_KEY,

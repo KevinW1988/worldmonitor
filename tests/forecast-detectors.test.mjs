@@ -3,6 +3,8 @@ import { afterEach, describe, it } from 'node:test';
 
 import {
   forecastId,
+  forecastIdFromKey,
+  buildStateDerivedForecast,
   normalize,
   makePrediction,
   resolveCascades,
@@ -3154,4 +3156,74 @@ describe('forecast quality gating', () => {
     assert.ok(worldState.situationClusters.every((cluster) => !/fc-[a-z]+-[0-9a-f]{8}/.test(cluster.label)));
   });
 
+});
+
+describe('stable forecast ids: semantic slots, not volatile titles (#4933)', () => {
+  const now = Date.now();
+  const milInputs = (country, type) => ({
+    militaryForecastInputs: {
+      fetchedAt: now,
+      theaters: [{ id: 'iran-theater', postureLevel: 'elevated', assessedAt: now }],
+      surges: [{
+        theaterId: 'iran-theater', surgeType: type, dominantCountry: country,
+        fighters: 5, strikeCapable: true, persistent: true, surgeMultiple: 4, assessedAt: now,
+      }],
+    },
+    temporalAnomalies: [],
+  });
+
+  it('military id is stable across surge-type and country changes in the same theater', () => {
+    const a = detectMilitaryScenarios(milInputs('US', 'fighter'));
+    const b = detectMilitaryScenarios(milInputs('Israel', 'airlift'));
+    assert.equal(a.length, 1);
+    assert.equal(b.length, 1);
+    assert.notEqual(a[0].title, b[0].title);
+    assert.equal(a[0].id, b[0].id);
+  });
+
+  it('military ids differ across theaters', () => {
+    const preds = detectMilitaryScenarios({
+      militaryForecastInputs: {
+        fetchedAt: now,
+        theaters: [
+          { id: 'iran-theater', postureLevel: 'elevated', assessedAt: now },
+          { id: 'taiwan-theater', postureLevel: 'elevated', assessedAt: now },
+        ],
+        surges: [],
+      },
+      temporalAnomalies: [],
+    });
+    assert.equal(preds.length, 2);
+    assert.notEqual(preds[0].id, preds[1].id);
+  });
+
+  it('trend continuity survives a military title change', () => {
+    const a = detectMilitaryScenarios(milInputs('US', 'fighter'));
+    const b = detectMilitaryScenarios(milInputs('Israel', 'airlift'));
+    const priorSnap = buildPriorForecastSnapshot({ ...a[0], probability: 0.1 });
+    computeTrends(b, { predictions: [priorSnap] });
+    assert.equal(b[0].trend, 'rising');
+    assert.equal(b[0].priorProbability, 0.1);
+  });
+
+  it('state-derived id keys on domain+bucket+dominantRegion, not the volatile cluster label', () => {
+    const mkUnit = (label) => ({
+      id: `state-${label}`, label, stateKind: 'market_stress',
+      dominantRegion: 'Middle East', regions: ['Middle East'],
+      avgProbability: 0.5, avgConfidence: 0.5,
+      situationCount: 2, forecastCount: 3,
+    });
+    const bucket = { id: 'energy', label: 'Energy', pressureScore: 0.6, confidence: 0.5 };
+    const candidate = { score: 0.6, criticalLift: 0, primarySignalType: 'energy_supply_shock', primaryChannel: 'energy' };
+    const a = buildStateDerivedForecast(mkUnit('Hormuz pressure complex'), 'market', bucket, candidate, null);
+    const b = buildStateDerivedForecast(mkUnit('Gulf energy stress cluster'), 'market', bucket, candidate, null);
+    assert.notEqual(a.title, b.title);
+    assert.equal(a.id, b.id);
+  });
+
+  it('forecastIdFromKey is deterministic, domain-scoped, and keeps the fc-<domain>-<8hex> format', () => {
+    assert.equal(forecastIdFromKey('military', 'theater:iran-theater'), forecastIdFromKey('military', 'theater:iran-theater'));
+    assert.notEqual(forecastIdFromKey('military', 'theater:iran-theater'), forecastIdFromKey('conflict', 'theater:iran-theater'));
+    assert.match(forecastIdFromKey('military', 'theater:iran-theater'), /^fc-military-[0-9a-f]{8}$/);
+  });
 });
