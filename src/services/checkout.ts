@@ -678,7 +678,7 @@ export async function resumePendingCheckout(options?: {
       referralCode: intent.referralCode,
       discountCode: intent.discountCode,
     },
-    { fallbackToPricingPage: false },
+    { fallbackToPricingPage: false, analyticsSurface: 'dashboard-resume' },
   );
   if (success) clearPendingCheckoutIntent();
   return success;
@@ -744,7 +744,7 @@ let _checkoutInFlight = false;
 export async function startCheckout(
   productId: string,
   options?: { discountCode?: string; referralCode?: string; bypassPendingGuard?: boolean },
-  behavior?: { fallbackToPricingPage?: boolean },
+  behavior?: { fallbackToPricingPage?: boolean; analyticsSurface?: 'dashboard' | 'dashboard-resume' },
 ): Promise<boolean> {
   if (_checkoutInFlight) return false;
   const fallbackToPricingPage = behavior?.fallbackToPricingPage ?? true;
@@ -752,8 +752,10 @@ export async function startCheckout(
   const user = getCurrentClerkUser();
   // Funnel (#4931): every dashboard upgrade CTA routes through here, so one
   // call site covers them all. Fires before the no-user branch so signed-out
-  // intent clicks are counted (flagged authed:false).
-  trackCheckoutStart(productId, Boolean(user));
+  // intent clicks are counted (flagged authed:false). The post-sign-in
+  // auto-resume passes 'dashboard-resume' so a signed-out conversion isn't
+  // read as two independent attempts.
+  trackCheckoutStart(productId, Boolean(user), behavior?.analyticsSurface ?? 'dashboard');
   if (!user) {
     const intent = {
       productId,

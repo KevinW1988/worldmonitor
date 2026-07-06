@@ -423,10 +423,18 @@ export function trackGateHit(feature: string): void {
  * Fired when a checkout is initiated from the dashboard (any locked-panel
  * CTA, settings upgrade card, banner, etc. — all route through
  * `startCheckout`). `authed: false` marks intent clicks from signed-out
- * users that detour through sign-in/`/pro` before a Dodo session exists.
+ * users that detour through sign-in before a Dodo session exists;
+ * `surface: 'dashboard-resume'` marks the post-sign-in auto-resume
+ * re-entry so a signed-out conversion (two events: dashboard/authed:false,
+ * then dashboard-resume/authed:true) isn't double-counted as two attempts.
+ * The /pro page mirrors this with 'pro-page' / 'pro-resume'.
  */
-export function trackCheckoutStart(productId: string, authed: boolean): void {
-  track('checkout-start', { productId, surface: 'dashboard', authed });
+export function trackCheckoutStart(
+  productId: string,
+  authed: boolean,
+  surface: 'dashboard' | 'dashboard-resume' = 'dashboard',
+): void {
+  track('checkout-start', { productId, surface, authed });
 }
 
 /**
