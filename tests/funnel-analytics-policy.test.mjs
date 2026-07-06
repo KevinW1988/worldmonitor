@@ -139,3 +139,19 @@ test('/pro startCheckout has a synchronous re-entrancy guard (round-4 F4)', () =
   assert.ok(pro.includes('startCheckoutEntryInFlight'),
     'rapid double-clicks double-fire checkout-start without the whole-start guard');
 });
+
+test('/pro checkout-start survives the Dodo redirect via sessionStorage handoff (round-5)', () => {
+  const pro = read('pro-test/src/services/checkout.ts');
+  assert.ok(pro.includes("'wm-pro-funnel-pending'"),
+    '/pro no longer persists undelivered checkout-start — the fast signed-in path dies with the redirect');
+  assert.ok(pro.includes('persistFunnelEventForReplay(event, data)'),
+    '/pro queue branch no longer mirrors events into sessionStorage');
+  assert.ok(pro.includes('clearPersistedFunnelEvents()'),
+    '/pro flush no longer clears the mirror — delivered events would double-replay on the dashboard');
+  const analytics = read('src/services/analytics.ts');
+  assert.ok(analytics.includes("'wm-pro-funnel-pending'"),
+    'dashboard replay no longer reads the /pro handoff key (keys must match across builds)');
+  const layout = read('src/app/panel-layout.ts');
+  assert.ok(layout.includes('replayPendingProFunnelEvents()'),
+    'panel-layout boot no longer replays /pro funnel events');
+});

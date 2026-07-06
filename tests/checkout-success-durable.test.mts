@@ -65,6 +65,56 @@ describe('checkout-start product bucketing (#4934 round-4 F2)', () => {
   });
 });
 
+describe('/pro funnel replay across the Dodo redirect (#4934 round-5)', () => {
+  afterEach(() => {
+    delete (globalThis as { window?: unknown }).window;
+  });
+
+  it('replays persisted checkout-start events with every field re-validated', async () => {
+    const analytics = await import('../src/services/analytics.ts');
+    analytics.resetAnalyticsForTesting();
+    const storage = new MemoryStorage();
+    storage.setItem('wm-pro-funnel-pending', JSON.stringify([
+      { event: 'checkout-start', data: { productId: 'pdt_0Nbtt71uObulf7fGXhQup', surface: 'pro-resume', authed: true } },
+      { event: 'checkout-start', data: { productId: 'pdt_crafted_junk', surface: 'nonsense', authed: 'yes' } },
+      { event: 'totally-made-up-event', data: { productId: 'x' } },
+      'garbage-entry',
+    ]));
+    const calls = installWindow(storage, { withUmami: true });
+
+    analytics.replayPendingProFunnelEvents();
+
+    assert.equal(storage.getItem('wm-pro-funnel-pending'), null, 'pending key must clear on replay');
+    assert.deepEqual(calls, [
+      {
+        name: 'checkout-start',
+        data: { productId: 'pdt_0Nbtt71uObulf7fGXhQup', surface: 'pro-resume', authed: true, replayed: true },
+      },
+      {
+        name: 'checkout-start',
+        data: { productId: 'unknown', surface: 'pro-page', authed: true, replayed: true },
+      },
+    ], 'unknown events dropped; crafted fields collapsed to closed vocabularies');
+  });
+
+  it('is a no-op on ordinary boots and drops malformed storage', async () => {
+    const analytics = await import('../src/services/analytics.ts');
+    analytics.resetAnalyticsForTesting();
+    const empty = new MemoryStorage();
+    const noCalls = installWindow(empty, { withUmami: true });
+    analytics.replayPendingProFunnelEvents();
+    assert.deepEqual(noCalls, []);
+
+    analytics.resetAnalyticsForTesting();
+    const malformed = new MemoryStorage();
+    malformed.setItem('wm-pro-funnel-pending', '{not json');
+    const stillNoCalls = installWindow(malformed, { withUmami: true });
+    analytics.replayPendingProFunnelEvents();
+    assert.deepEqual(stillNoCalls, []);
+    assert.equal(malformed.getItem('wm-pro-funnel-pending'), null, 'malformed payload must still be cleared');
+  });
+});
+
 describe('durable checkout-success', () => {
   afterEach(() => {
     delete (globalThis as { window?: unknown }).window;

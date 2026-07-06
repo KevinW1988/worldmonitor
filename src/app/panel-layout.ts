@@ -40,7 +40,7 @@ import { resolveNewsCategories, enabledNewsCategoryKeys } from '@/config/feed-re
 import { BETA_MODE } from '@/config/beta';
 import { t } from '@/services/i18n';
 import { getCurrentTheme } from '@/utils';
-import { trackCriticalBannerAction, trackCheckoutSuccess, trackCheckoutFailed, replayPendingCheckoutSuccess } from '@/services/analytics';
+import { trackCriticalBannerAction, trackCheckoutSuccess, trackCheckoutFailed, replayPendingCheckoutSuccess, replayPendingProFunnelEvents } from '@/services/analytics';
 import { getStoredMapModePreference } from '@/services/map-mode-preference';
 import { loadWidgets, saveWidget, isProUser } from '@/services/widget-store';
 import type { CustomWidgetSpec } from '@/services/widget-store';
@@ -308,6 +308,11 @@ export class PanelLayoutManager implements AppModule {
       // pre-reload track left behind (no-op on ordinary loads).
       replayPendingCheckoutSuccess();
     }
+    // #4934 round-5: /pro checkout-start events that died with the Dodo
+    // redirect are mirrored in sessionStorage; the buyer lands back here
+    // in the same tab — on BOTH the checkout-return and ordinary branches —
+    // so this replay is unconditional (no-op when nothing is pending).
+    replayPendingProFunnelEvents();
 
     // Always register the payment-failure-banner listener — onSubscriptionChange
     // is an in-memory listener registry, doesn't open any network connection,

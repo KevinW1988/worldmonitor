@@ -511,6 +511,48 @@ export function replayPendingCheckoutSuccess(): void {
 }
 
 /**
+ * Replay /pro checkout-start events that died with the redirect (#4934
+ * round-5): the /pro page mirrors undelivered checkout-start events into
+ * sessionStorage (see pro-test/src/services/checkout.ts) because the fast
+ * signed-in/resume path top-level-redirects to Dodo before its flush poll
+ * runs. The buyer returns to the dashboard in the same tab, so this boot
+ * hook replays them here. Every field is re-validated against closed
+ * vocabularies — sessionStorage is tab-local but still client-writable,
+ * and replayed junk must not become analytics cardinality.
+ */
+const PRO_FUNNEL_PENDING_KEY = 'wm-pro-funnel-pending';
+
+export function replayPendingProFunnelEvents(): void {
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(PRO_FUNNEL_PENDING_KEY);
+    window.sessionStorage.removeItem(PRO_FUNNEL_PENDING_KEY);
+  } catch {
+    return;
+  }
+  if (!raw) return;
+  try {
+    const items: unknown = JSON.parse(raw);
+    if (!Array.isArray(items)) return;
+    for (const item of items.slice(0, 10)) {
+      if (!item || typeof item !== 'object') continue;
+      const { event, data } = item as { event?: unknown; data?: unknown };
+      if (event !== 'checkout-start' || !data || typeof data !== 'object') continue;
+      const d = data as Record<string, unknown>;
+      const surface = d.surface === 'pro-resume' ? 'pro-resume' : 'pro-page';
+      track('checkout-start', {
+        productId: bucketProductIdForAnalytics(String(d.productId ?? '')),
+        surface,
+        authed: Boolean(d.authed),
+        replayed: true,
+      });
+    }
+  } catch {
+    // Malformed storage — already removed above; drop.
+  }
+}
+
+/**
  * Closed status vocabulary for checkout-failed (#4934 round-2 F3). The raw
  * value is URL-derived (Dodo return params — and checkout-return.ts:117
  * forwards ANY unknown status when Dodo ID params are present), so a

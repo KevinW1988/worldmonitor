@@ -45,6 +45,42 @@ const FUNNEL_FLUSH_MAX_ATTEMPTS = 60;
 const pendingFunnelEvents: Array<{ event: string; data?: Record<string, unknown> }> = [];
 let funnelFlushTimer: number | null = null;
 
+/**
+ * Same-origin handoff for checkout-start events that would otherwise die
+ * with the page (#4934 round-5): the fast signed-in/resume path continues
+ * straight into doCheckout's top-level redirect to Dodo, unloading the
+ * page before the flush poll ever runs. Queued checkout-start events are
+ * mirrored into sessionStorage (per-tab, survives the Dodo round-trip)
+ * and the dashboard replays them on the return landing — see
+ * replayPendingProFunnelEvents in src/services/analytics.ts, which
+ * re-validates every field against closed vocabularies before tracking.
+ * Cleared here the moment a local flush delivers, so no double-replay.
+ */
+const PRO_FUNNEL_PENDING_KEY = 'wm-pro-funnel-pending';
+const PRO_FUNNEL_PERSIST_LIMIT = 10;
+
+function persistFunnelEventForReplay(event: string, data?: Record<string, unknown>): void {
+  if (event !== 'checkout-start') return;
+  try {
+    const raw = window.sessionStorage.getItem(PRO_FUNNEL_PENDING_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const items = Array.isArray(parsed) ? parsed : [];
+    items.push({ event, data });
+    while (items.length > PRO_FUNNEL_PERSIST_LIMIT) items.shift();
+    window.sessionStorage.setItem(PRO_FUNNEL_PENDING_KEY, JSON.stringify(items));
+  } catch {
+    /* storage unavailable — replay just won't be possible */
+  }
+}
+
+function clearPersistedFunnelEvents(): void {
+  try {
+    window.sessionStorage.removeItem(PRO_FUNNEL_PENDING_KEY);
+  } catch {
+    /* no-op */
+  }
+}
+
 function getUmami(): { track: (event: string, data?: Record<string, unknown>) => void } | undefined {
   try {
     return (window as Window & {
@@ -61,6 +97,9 @@ function flushPendingFunnelEvents(): boolean {
   for (const item of pendingFunnelEvents.splice(0, pendingFunnelEvents.length)) {
     try { umami.track(item.event, item.data); } catch { /* tracker threw — drop */ }
   }
+  // Everything queued has now reached the tracker — drop the sessionStorage
+  // mirror so the dashboard return doesn't replay a delivered event.
+  clearPersistedFunnelEvents();
   return true;
 }
 
@@ -73,6 +112,7 @@ function trackFunnelEvent(event: string, data?: Record<string, unknown>): void {
     }
     if (pendingFunnelEvents.length >= FUNNEL_QUEUE_LIMIT) pendingFunnelEvents.shift();
     pendingFunnelEvents.push({ event, data });
+    persistFunnelEventForReplay(event, data);
     if (funnelFlushTimer === null) {
       let attempts = 0;
       funnelFlushTimer = window.setInterval(() => {
