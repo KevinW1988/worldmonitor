@@ -234,6 +234,20 @@
       "removal_issue": null
     },
     {
+      "path": "api/http-message-signatures-directory.ts",
+      "category": "external-protocol",
+      "reason": "Web Bot Auth key directory (draft-meunier-web-bot-auth-architecture / http-message-signatures-directory). Publishes an Ed25519 JWK Set at /.well-known/http-message-signatures-directory; body shape and application/http-message-signatures-directory+json content-type are dictated by the spec. Dynamic per-request so nbf/exp roll a <=24h validity window.",
+      "owner": "@SebastienMelki",
+      "removal_issue": null
+    },
+    {
+      "path": "api/agent-auth.ts",
+      "category": "external-protocol",
+      "reason": "RFC 9728 agent-auth discovery challenge at /agent/auth. Returns 401 + WWW-Authenticate: Bearer resource_metadata=... (host-derived PRM pointer) so a GET-probing agent/scanner discovers the auth flow — /mcp's bare GET must stay 405 for the SSE handshake. Response is an auth challenge, not a JSON data API.",
+      "owner": "@SebastienMelki",
+      "removal_issue": null
+    },
+    {
       "path": "api/discord/oauth/callback.ts",
       "category": "external-protocol",
       "reason": "Discord OAuth redirect target — response is an HTML popup-closer page, query-param shape fixed by Discord.",
