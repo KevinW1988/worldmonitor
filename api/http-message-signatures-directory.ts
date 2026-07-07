@@ -37,8 +37,10 @@ export const config = { runtime: 'edge' };
 // replace this constant; `kid` re-derives from it automatically.
 const ED25519_PUBLIC_KEY_X = 'haxeg7usB7Giri_2DP_UNE0LcFhrPd1IkNZs9RDI0k4';
 
-// Backdate `nbf` an hour for verifier clock skew; roll `exp` a full day forward
-// (spec: expiry SHOULD be <= 24h). max-age keeps any cached copy inside it.
+// Backdate `nbf` an hour for verifier clock skew; `exp` is `nbf` + a 24h TTL, so
+// the total advertised validity window is exactly KEY_TTL_SECONDS (the spec:
+// expiry SHOULD be <= 24h — computing exp from now instead of nbf would make the
+// window 25h). max-age keeps any cached copy inside it.
 const CLOCK_SKEW_SECONDS = 3600;
 const KEY_TTL_SECONDS = 86400;
 
@@ -64,7 +66,7 @@ export default async function handler(req: Request): Promise<Response> {
   const guarded = guardMetadataMethod(req);
   if (guarded) return guarded;
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  const notBefore = Math.floor(Date.now() / 1000) - CLOCK_SKEW_SECONDS;
   const kid = await jwkThumbprint(ED25519_PUBLIC_KEY_X);
 
   const body = JSON.stringify({
@@ -75,8 +77,8 @@ export default async function handler(req: Request): Promise<Response> {
         x: ED25519_PUBLIC_KEY_X,
         kid,
         use: 'sig',
-        nbf: nowSeconds - CLOCK_SKEW_SECONDS,
-        exp: nowSeconds + KEY_TTL_SECONDS,
+        nbf: notBefore,
+        exp: notBefore + KEY_TTL_SECONDS,
       },
     ],
   });

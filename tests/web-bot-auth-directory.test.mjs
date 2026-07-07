@@ -65,8 +65,8 @@ describe('Web Bot Auth key directory (/.well-known/http-message-signatures-direc
     assert.ok(jwk.nbf <= nowSeconds, 'nbf must not be in the future (allow clock-skew backdate)');
     assert.ok(jwk.exp > nowSeconds, 'exp must be in the future — the key must not read as expired');
     assert.ok(
-      jwk.exp - jwk.nbf <= 25 * 3600,
-      'validity window should stay within the spec-recommended ~24h',
+      jwk.exp - jwk.nbf <= 24 * 3600,
+      `validity window must stay within the spec-recommended <=24h (got ${jwk.exp - jwk.nbf}s)`,
     );
   });
 
