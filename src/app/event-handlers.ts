@@ -797,8 +797,10 @@ export class EventHandlerManager implements AppModule {
       !isMissionPresetPromptDismissed();
     if (shouldPrompt) {
       // Defer the onboarding auto-open to browser idle after first paint so it
-      // never competes with load or first-interaction work. Re-check state at
-      // fire time since the idle wait can outlast an early user choice.
+      // never competes with load or first-interaction work. This replaced a
+      // fixed 700ms timeout that forced layout reads (getBoundingClientRect +
+      // offsetHeight) on the post-load path. Re-check state at fire time since
+      // the idle wait can outlast an early user choice.
       scheduleAfterFirstPaint(() => {
         if (this.ctx.isDestroyed) return;
         if (loadStoredMissionPreset() || isMissionPresetPromptDismissed()) return;
