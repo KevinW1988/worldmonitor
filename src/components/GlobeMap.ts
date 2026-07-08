@@ -2951,6 +2951,7 @@ export class GlobeMap {
       const x = rect.width / 2;
       const y = rect.height / 2;
       window.setTimeout(() => {
+        if (this.destroyed || !this.popup) return;
         this.popup?.show({ type: 'waterway', data: waterway, x, y });
       }, SET_CENTER_ROTATION_MS);
     };

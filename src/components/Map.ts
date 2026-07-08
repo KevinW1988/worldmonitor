@@ -3909,6 +3909,7 @@ export class MapComponent {
   // Pans first so the waterway lands at the container centre, where the popup is
   // anchored — unlike the trigger* methods which project in place.
   public openChokepoint(id: string): void {
+    if (this.destroyed) return;
     const waterway = STRATEGIC_WATERWAYS.find(w => w.id === id || w.chokepointId === id);
     if (!waterway) return;
     this.setCenter(waterway.lat, waterway.lon);

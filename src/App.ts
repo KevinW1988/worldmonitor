@@ -151,6 +151,7 @@ export class App {
   private pendingDeepLinkExpanded = false;
   private pendingDeepLinkStoryCode: string | null = null;
   private pendingDeepLinkChokepoint: string | null = null;
+  private chokepointDeepLinkTimer: number | null = null;
 
   private panelLayout: PanelLayoutManager;
   private dataLoader: DataLoaderManager;
@@ -944,6 +945,7 @@ export class App {
       isIdle: false,
       initialLoadComplete: false,
       resolvedLocation: 'global',
+      activeChokepoint: initialUrlState.chokepoint ?? null,
       initialUrlState,
       PANEL_ORDER_KEY,
       PANEL_SPANS_KEY,
@@ -1768,6 +1770,10 @@ export class App {
       window.cancelAnimationFrame(this.visiblePanelPrimeRaf);
       this.visiblePanelPrimeRaf = null;
     }
+    if (this.chokepointDeepLinkTimer !== null) {
+      window.clearTimeout(this.chokepointDeepLinkTimer);
+      this.chokepointDeepLinkTimer = null;
+    }
 
     // Destroy all modules in reverse order
     for (let i = this.modules.length - 1; i >= 0; i--) {
@@ -1973,7 +1979,10 @@ export class App {
     this.pendingDeepLinkChokepoint = null;
     if (deepLinkChokepoint) {
       trackDeeplinkOpened('chokepoint', deepLinkChokepoint);
-      setTimeout(() => {
+      this.state.activeChokepoint = deepLinkChokepoint;
+      this.chokepointDeepLinkTimer = window.setTimeout(() => {
+        this.chokepointDeepLinkTimer = null;
+        if (this.state.isDestroyed) return;
         this.state.mapLayers.waterways = true;
         this.state.map?.enableLayer('waterways');
         this.state.map?.openChokepoint(deepLinkChokepoint);

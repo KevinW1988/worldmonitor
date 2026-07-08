@@ -143,6 +143,7 @@ export class MapContainer {
   private rendererDemandCleanup: (() => void) | null = null;
   private globeInitToken = 0;
   private rendererInitToken = 0;
+  private rendererReady = false;
   private destroyed = false;
   private pendingCenter: PendingCenter | null = null;
   private pendingViewportActions: PendingViewportAction[] = [];
@@ -290,6 +291,7 @@ export class MapContainer {
   }
 
   private prepareRendererDom(modeClass: 'svg-mode' | 'deckgl-mode' | 'globe-mode'): void {
+    this.rendererReady = false;
     this.container.classList.remove('map-renderer-shell', 'deckgl-mode', 'globe-mode', 'svg-mode');
     delete this.container.dataset.mapRendererPending;
     this.container.removeAttribute('aria-busy');
@@ -309,6 +311,17 @@ export class MapContainer {
 
   private hasActiveRenderer(): boolean {
     return Boolean(this.globeMap || this.deckGLMap || this.svgMap);
+  }
+
+  private isChokepointRendererReady(): boolean {
+    return this.rendererReady && this.hasActiveRenderer();
+  }
+
+  private replayPendingChokepointOpen(): void {
+    if (this.pendingChokepointOpen === null) return;
+    const pendingChokepointOpen = this.pendingChokepointOpen;
+    this.pendingChokepointOpen = null;
+    this.openChokepoint(pendingChokepointOpen);
   }
 
   private startResizeObserver(): void {
@@ -461,6 +474,8 @@ export class MapContainer {
     // clear partial WebGL nodes before creating the SVG fallback.
     this.svgMap = new MapComponent(this.container, this.initialState, { chrome: this.chrome, isMobile: this.isMobile });
     this.rehydrateActiveMap();
+    this.rendererReady = true;
+    this.replayPendingChokepointOpen();
     markLcpDebug('wm:map:svg-ready');
   }
 
@@ -476,7 +491,12 @@ export class MapContainer {
         chrome: this.chrome,
       });
       this.rehydrateActiveMap();
-      markLcpDebug('wm:map:globe-ready');
+      void this.globeMap.whenReady().then(() => {
+        if (!this.isCurrentRendererInit(rendererToken) || !this.useGlobe) return;
+        this.rendererReady = true;
+        this.replayPendingChokepointOpen();
+        markLcpDebug('wm:map:globe-ready');
+      }).catch(() => {});
     } catch (error) {
       this.handleGlobeInitFailure(globeToken, error);
     }
@@ -512,6 +532,8 @@ export class MapContainer {
       // SVG, instead of becoming an unhandled rejection behind a blank map.
       await this.deckGLMap.whenReady();
       if (!this.isCurrentRendererInit(token)) return;
+      this.rendererReady = true;
+      this.replayPendingChokepointOpen();
       markLcpDebug('wm:map:deck-ready');
     } catch (error) {
       if (!this.isCurrentRendererInit(token)) return;
@@ -662,11 +684,6 @@ export class MapContainer {
       const pendingCenter = this.pendingCenter;
       this.pendingCenter = null;
       this.setCenter(pendingCenter.lat, pendingCenter.lon, pendingCenter.zoom);
-    }
-    if (this.pendingChokepointOpen !== null) {
-      const pendingChokepointOpen = this.pendingChokepointOpen;
-      this.pendingChokepointOpen = null;
-      this.openChokepoint(pendingChokepointOpen);
     }
     for (const layer of this.hiddenLayerToggles) this.hideLayerToggle(layer);
   }
@@ -1326,10 +1343,11 @@ export class MapContainer {
   // Pan/rotate to a chokepoint and open its waterway popup. Unlike the trigger*
   // clicks above, globe is a real target here (it pans the point to front-centre).
   public openChokepoint(id: string): void {
-    if (!this.hasActiveRenderer()) {
+    if (!this.isChokepointRendererReady()) {
       this.pendingChokepointOpen = id;
       return;
     }
+    this.pendingChokepointOpen = null;
     if (this.useGlobe) {
       this.globeMap?.openChokepoint(id);
     } else if (this.useDeckGL) {
@@ -1463,6 +1481,7 @@ export class MapContainer {
 
   public destroy(): void {
     this.destroyed = true;
+    this.rendererReady = false;
     this.resizeObserver?.disconnect();
     this.rendererDemandCleanup?.();
     this.rendererDemandCleanup = null;

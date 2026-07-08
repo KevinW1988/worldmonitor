@@ -98,6 +98,12 @@ describe('buildMapUrl expanded param', () => {
     const params = new URL(url).searchParams;
     assert.equal(params.has('expanded'), false);
   });
+
+  it('includes chokepoint when present', () => {
+    const url = buildMapUrl(base, { ...baseState, chokepoint: 'hormuz_strait' });
+    const params = new URL(url).searchParams;
+    assert.equal(params.get('chokepoint'), 'hormuz_strait');
+  });
 });
 
 describe('expanded param round-trip', () => {
@@ -122,5 +128,11 @@ describe('expanded param round-trip', () => {
     const parsed = parseMapUrlState(new URL(url).search, EMPTY_LAYERS);
     assert.equal(parsed.country, 'IR');
     assert.equal(parsed.expanded, undefined);
+  });
+
+  it('round-trips chokepoint deep links', () => {
+    const url = buildMapUrl(base, { ...baseState, chokepoint: 'hormuz_strait' });
+    const parsed = parseMapUrlState(new URL(url).search, EMPTY_LAYERS);
+    assert.equal(parsed.chokepoint, 'hormuz_strait');
   });
 });

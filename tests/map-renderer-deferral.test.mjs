@@ -372,19 +372,48 @@ describe('map renderer deferral boundary', () => {
       members.has('pendingChokepointOpen'),
       'MapContainer should cache chokepoint deep-link opens for deferred renderer replay',
     );
+    assert.ok(
+      members.has('rendererReady'),
+      'MapContainer should track concrete renderer readiness before replaying chokepoint opens',
+    );
+    assert.ok(
+      members.has('replayPendingChokepointOpen'),
+      'MapContainer should replay queued chokepoint opens from explicit renderer-ready points',
+    );
 
     const openBody = methodBodyText(cls, 'openChokepoint');
     assert.match(
       openBody,
-      /!this\.hasActiveRenderer\(\)[\s\S]*this\.pendingChokepointOpen\s*=\s*id[\s\S]*return/,
-      'openChokepoint should queue the id when no concrete renderer exists yet',
+      /!this\.isChokepointRendererReady\(\)[\s\S]*this\.pendingChokepointOpen\s*=\s*id[\s\S]*return/,
+      'openChokepoint should queue the id until the concrete renderer is ready',
+    );
+
+    const replayBody = methodBodyText(cls, 'replayPendingChokepointOpen');
+    assert.match(
+      replayBody,
+      /this\.pendingChokepointOpen[\s\S]*this\.openChokepoint\(pendingChokepointOpen\)/,
+      'replayPendingChokepointOpen should drain the queued chokepoint through the public open path',
     );
 
     const rehydrateBody = methodBodyText(cls, 'rehydrateActiveMap');
-    assert.match(
+    assert.doesNotMatch(
       rehydrateBody,
-      /this\.pendingChokepointOpen\s*!==\s*null[\s\S]*this\.openChokepoint\(pendingChokepointOpen\)/,
-      'rehydrateActiveMap should replay a queued chokepoint open after renderer creation',
+      /pendingChokepointOpen/,
+      'rehydrateActiveMap must not consume chokepoint opens before async renderer readiness/fallback settles',
+    );
+
+    const svgBody = methodBodyText(cls, 'initSvgMap');
+    assert.match(
+      svgBody,
+      /this\.rendererReady\s*=\s*true[\s\S]*this\.replayPendingChokepointOpen\(\)/,
+      'SVG fallback should replay queued chokepoint opens once it is ready',
+    );
+
+    const deckBody = methodBodyText(cls, 'createDeckGLMap');
+    assert.match(
+      deckBody,
+      /await\s+this\.deckGLMap\.whenReady\(\)[\s\S]*this\.rendererReady\s*=\s*true[\s\S]*this\.replayPendingChokepointOpen\(\)/,
+      'DeckGL should replay queued chokepoint opens only after whenReady() succeeds',
     );
   });
 

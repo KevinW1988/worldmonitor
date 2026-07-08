@@ -154,6 +154,7 @@ export function buildMapUrl(
     layers: MapLayers;
     country?: string;
     expanded?: boolean;
+    chokepoint?: string;
   }
 ): string {
   let url: URL;
@@ -183,6 +184,10 @@ export function buildMapUrl(
 
   if (state.expanded) {
     params.set('expanded', '1');
+  }
+
+  if (state.chokepoint) {
+    params.set('chokepoint', state.chokepoint);
   }
 
   url.search = params.toString();
