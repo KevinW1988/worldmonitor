@@ -459,6 +459,11 @@ interface GlobeControlsLike {
   removeEventListener(type: string, listener: () => void): void;
 }
 
+// Duration (ms) of the globe.gl pointOfView rotation used by setCenter(). Shared
+// so callers that must wait for the rotation to settle (e.g. openChokepoint,
+// which opens a popup at container centre) stay in lockstep with the animation.
+const SET_CENTER_ROTATION_MS = 1200;
+
 export class GlobeMap {
   private container: HTMLElement;
   private globe: GlobeInstance | null = null;
@@ -2771,7 +2776,7 @@ export class GlobeMap {
       else if (zoom >= 3) altitude = 0.8;
       else                altitude = 1.5;
     }
-    this.globe.pointOfView({ lat, lng: lon, altitude }, 1200);
+    this.globe.pointOfView({ lat, lng: lon, altitude }, SET_CENTER_ROTATION_MS);
   }
 
   public getCenter(): { lat: number; lon: number } | null {
@@ -2921,7 +2926,8 @@ export class GlobeMap {
   public triggerNuclearClick(_id: string): void {}
   public triggerIrradiatorClick(_id: string): void {}
   // Rotate the globe so the chokepoint/waterway faces front, then open its popup
-  // once it has settled at container centre (pointOfView animates over ~1200ms).
+  // once it has settled at container centre. The wait is tied to setCenter()'s
+  // rotation duration via SET_CENTER_ROTATION_MS so the two can't drift apart.
   public openChokepoint(id: string): void {
     const waterway = STRATEGIC_WATERWAYS.find(w => w.id === id || w.chokepointId === id);
     if (!waterway || !this.globe) return;
@@ -2931,7 +2937,7 @@ export class GlobeMap {
     const y = rect.height / 2;
     window.setTimeout(() => {
       this.popup?.show({ type: 'waterway', data: waterway, x, y });
-    }, 1200);
+    }, SET_CENTER_ROTATION_MS);
   }
   public fitCountry(code: string): void {
     if (!this.globe) return;
