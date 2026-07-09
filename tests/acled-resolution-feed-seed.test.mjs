@@ -11,10 +11,16 @@ function source(path) {
   return readFileSync(resolve(root, path), 'utf8');
 }
 
+function assertObjectProperty(sourceText, objectName, propertyPattern) {
+  assert.match(sourceText, new RegExp(`${objectName}:\\s*\\{[^}]*${propertyPattern}`, 's'));
+}
+
 describe('ACLED resolution-feed seed contract (#5076)', () => {
   const conflictSeed = source('scripts/seed-conflict-intel.mjs');
   const unrestSeed = source('scripts/seed-unrest-events.mjs');
   const resolutionSpec = source('scripts/_forecast-resolution.mjs');
+  const healthApi = source('api/health.js');
+  const seedHealthApi = source('api/seed-health.js');
 
   it('routes conflict hard counts to a long-window resolution key, not the map display key', () => {
     assert.match(resolutionSpec, /CONFLICT_COUNT_SOURCE_FEED\s*=\s*'conflict:acled-resolution:v1:all:0:0'/);
@@ -55,6 +61,14 @@ describe('ACLED resolution-feed seed contract (#5076)', () => {
     assert.match(conflictSeed, /const err = new Error\([\s\S]*ACLED display fetch failed for \$\{ACLED_CACHE_KEY\}[\s\S]*auxiliary conflict\/intel feeds mask the primary feed/);
     assert.match(conflictSeed, /if\s*\(\s*acled\.reason\?\.nonRetryable\s*\)\s*err\.nonRetryable\s*=\s*true/);
     assert.match(conflictSeed, /throw err/);
+  });
+
+  it('health surfaces the ACLED display cache and seeder heartbeat (#5099)', () => {
+    assert.match(healthApi, /acledIntel:\s*'conflict:acled:v1:all:0:0'/);
+    assertObjectProperty(healthApi, 'acledIntel', "key:\\s*'seed-meta:conflict:acled-intel'");
+    assertObjectProperty(healthApi, 'acledIntel', 'maxStaleMin:\\s*38');
+    assertObjectProperty(seedHealthApi, "'conflict:acled-intel'", "key:\\s*'seed-meta:conflict:acled-intel'");
+    assertObjectProperty(seedHealthApi, "'conflict:acled-intel'", 'intervalMin:\\s*19');
   });
 
   it('unrest seeder keeps the canonical display feed but also publishes a paginated 60d ACLED resolution feed', () => {
