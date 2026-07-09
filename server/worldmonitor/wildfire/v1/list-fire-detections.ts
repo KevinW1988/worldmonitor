@@ -37,7 +37,7 @@ function confidenceRank(confidence: FireDetection['confidence']): number {
 }
 
 function compareFireDetectionsForDashboard(a: FireDetection, b: FireDetection): number {
-  return Number(b.possibleExplosion) - Number(a.possibleExplosion)
+  return Number(Boolean(b.possibleExplosion)) - Number(Boolean(a.possibleExplosion))
     || confidenceRank(b.confidence) - confidenceRank(a.confidence)
     || numeric(b.brightness) - numeric(a.brightness)
     || numeric(b.frp) - numeric(a.frp)
