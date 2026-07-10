@@ -115,8 +115,8 @@ const BRIEF_LLM_SKIP_PROVIDERS = ['ollama', 'groq'];
  *
  * Four-layer graceful degradation:
  *   1. `deps.callAnalystWhyMatters(story)` — the analyst-context edge
- *      endpoint (brief:llm:whymatters:v9 cache lives there). Preferred.
- *   2. Direct read of the endpoint's v9 envelope cache (#4914) — the
+ *      endpoint (brief:llm:whymatters:v8 cache lives there). Preferred.
+ *   2. Direct read of the endpoint's v8 envelope cache (#4914) — the
  *      endpoint CALL can fail while its cached envelope is still valid;
  *      reusing it avoids a paid duplicate generation.
  *   3. Direct OpenRouter-chain fallback: cacheGet (v6) → callLLM → cacheSet.
@@ -165,16 +165,15 @@ export async function generateWhyMatters(story, deps) {
 
   // #4914: before paying a direct-chain generation, check the analyst
   // endpoint's OWN cache namespace. api/internal/brief-why-matters.ts
-  // stores its envelope at brief:llm:whymatters:v9:{hash} (v8→v9 at the
-  // #4944 U4 model cutover) under the same hashBriefStory identity — when
-  // the endpoint CALL failed transiently (or no endpoint is configured),
-  // the story may already have a paid, validated envelope sitting in
-  // Redis. Read-only: this fallback's own single-sentence output stays in
-  // its own namespace below, so the two prompt contracts never
-  // cross-contaminate in the write direction.
+  // stores its envelope at brief:llm:whymatters:v8:{hash} under the same
+  // hashBriefStory identity — when the endpoint CALL failed transiently
+  // (or no endpoint is configured), the story may already have a paid,
+  // validated envelope sitting in Redis. Read-only: this fallback's own
+  // single-sentence output stays in its own namespace below, so the two
+  // prompt contracts never cross-contaminate in the write direction.
   const storyHash = await hashBriefStory(story);
   try {
-    const analystRow = await deps.cacheGet(`brief:llm:whymatters:v9:${storyHash}`);
+    const analystRow = await deps.cacheGet(`brief:llm:whymatters:v8:${storyHash}`);
     if (analystRow && typeof analystRow === 'object' && typeof analystRow.whyMatters === 'string') {
       const analystTrimmed = analystRow.whyMatters.trim();
       // Same acceptance bounds as the live-endpoint path above.

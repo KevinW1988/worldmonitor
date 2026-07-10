@@ -313,9 +313,6 @@ interface WhyMattersEnvelope {
   whyMatters: string;
   producedBy: 'analyst' | 'gemini';
   at: string; // ISO8601
-  /** Reasoning-model env at write time — model-era guard (#4967 review).
-   *  Optional so pre-guard rows still validate. */
-  model?: string;
 }
 
 function isEnvelope(v: unknown): v is WhyMattersEnvelope {
@@ -324,23 +321,8 @@ function isEnvelope(v: unknown): v is WhyMattersEnvelope {
   return (
     typeof e.whyMatters === 'string' &&
     (e.producedBy === 'analyst' || e.producedBy === 'gemini') &&
-    typeof e.at === 'string' &&
-    (e.model === undefined || typeof e.model === 'string')
+    typeof e.at === 'string'
   );
-}
-
-/** The reasoning-model era this deployment writes/serves. Rows stamped with
- *  a different era are treated as misses, so a misordered deploy (v9 code
- *  before the U3 env flip) self-heals per request instead of per TTL. */
-function reasoningModelEra(): string {
-  return (process.env.LLM_REASONING_MODEL || 'default').trim();
-}
-
-/** Exported for tests: a cached row is servable only if it carries no era
- *  stamp (pre-guard row — grandfathered) or its stamp matches the current
- *  era. */
-export function isServableEnvelope(row: { model?: string }, era: string): boolean {
-  return row.model === undefined || row.model === era;
 }
 
 // ── Handler ───────────────────────────────────────────────────────────
@@ -431,19 +413,9 @@ export default async function handler(req: Request, ctx?: EdgeContext): Promise<
   // bodies arriving, the editorial voice and named-actor accuracy shift
   // enough that v6 prose had to be invalidated.
   //
-  // v8 → v9 (2026-07-06, #4944 U4): the analyst path's model moved to
-  // DeepSeek (LLM_REASONING_MODEL) — v8 rows carry the old model's voice
-  // and must age out at cutover.
-  //
-  // MERGE-ORDER GUARD: this bump must deploy only AFTER the U3 env flip
-  // (LLM_REASONING_MODEL=deepseek-v4-pro) is live — the fill model is
-  // env-governed, so deploying v9 against the old env would seed the fresh
-  // namespace with old-model prose and nothing later would evict it.
-  // Preconditions are pinned in PR #4967's body.
-  //
   // v6 history (kept for reference): category-gated context + prompt-level
-  // RELEVANCE RULE (2026-04-22) — those changes remain in v9.
-  const cacheKey = `brief:llm:whymatters:v9:${hash}`;
+  // RELEVANCE RULE (2026-04-22) — those changes remain in v8.
+  const cacheKey = `brief:llm:whymatters:v8:${hash}`;
   // Shadow v5→v6 for the same reason — a mid-rollout shadow record
   // comparing v7 pre-date-grounding vs gemini is not useful once v8 is live.
   const shadowKey = `brief:llm:whymatters:shadow:v6:${hash}`;
@@ -453,14 +425,7 @@ export default async function handler(req: Request, ctx?: EdgeContext): Promise<
   try {
     const raw = await readRawJsonFromUpstash(cacheKey);
     if (raw !== null && isEnvelope(raw)) {
-      // Model-era guard (#4967 review): a row written under a different
-      // LLM_REASONING_MODEL era is stale-by-definition — regenerate now
-      // rather than serving old-model prose until TTL expiry.
-      if (isServableEnvelope(raw, reasoningModelEra())) {
-        cached = raw;
-      } else {
-        console.warn(`[brief-why-matters] cache row from model era "${raw.model}" ≠ current "${reasoningModelEra()}" — treating as miss`);
-      }
+      cached = raw;
     }
   } catch (err) {
     console.warn(`[brief-why-matters] cache read degraded: ${err instanceof Error ? err.message : String(err)}`);
@@ -517,7 +482,6 @@ export default async function handler(req: Request, ctx?: EdgeContext): Promise<
       whyMatters: chosenValue,
       producedBy: chosenProducer,
       at: now,
-      model: reasoningModelEra(),
     };
     try {
       await setCachedData(cacheKey, envelope, WHY_MATTERS_TTL_SEC);
