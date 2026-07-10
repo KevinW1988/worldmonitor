@@ -1,14 +1,31 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFileSync as originalReadFileSync, existsSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+function readFileSync(path, options) {
+  const content = originalReadFileSync(path, options);
+  if (typeof content === 'string') {
+    return content.replace(/\r\n/g, '\n');
+  }
+  return content;
+}
 import { fileURLToPath } from 'node:url';
+import {
+  CONTENT_CORPUS_PREFIXES,
+  buildContentCorpusSitemapBlock,
+  discoverContentCorpusPages,
+  injectContentCorpusSitemapBlock,
+} from '../scripts/build-content-corpus-sitemap.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const packageJson = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8'));
 const vercelConfig = JSON.parse(readFileSync(resolve(__dirname, '../vercel.json'), 'utf-8'));
 const viteConfigSource = readFileSync(resolve(__dirname, '../vite.config.ts'), 'utf-8');
 const proViteConfigSource = readFileSync(resolve(__dirname, '../pro-test/vite.config.ts'), 'utf-8');
+const sitemapSource = readFileSync(resolve(__dirname, '../public/sitemap.xml'), 'utf-8');
+const robotsSource = readFileSync(resolve(__dirname, '../public/robots.txt'), 'utf-8');
 const mainSource = readFileSync(resolve(__dirname, '../src/main.ts'), 'utf-8');
 const zodCspSource = readFileSync(resolve(__dirname, '../src/bootstrap/zod-csp.ts'), 'utf-8');
 const proIndexCssSource = readFileSync(resolve(__dirname, '../pro-test/src/index.css'), 'utf-8');
@@ -16,7 +33,9 @@ const middlewareSource = readFileSync(resolve(__dirname, '../middleware.ts'), 'u
 const dockerfileSource = readFileSync(resolve(__dirname, '../Dockerfile'), 'utf-8');
 const dockerNginxSource = readFileSync(resolve(__dirname, '../docker/nginx.conf'), 'utf-8');
 const frontendDockerfileSource = readFileSync(resolve(__dirname, '../docker/Dockerfile'), 'utf-8');
-const SPA_HTML_CACHE_SOURCE = '/((?!api|mcp|a2a|ask|oauth|assets|blog|docs|embed|embed\\.html|favico|map-styles|data|textures|pro|sw\\.js|workbox-[a-f0-9]+\\.js|manifest\\.webmanifest|offline\\.html|robots\\.txt|sitemap\\.xml|llms\\.txt|llms-full\\.txt|openapi\\.yaml|openapi\\.json|auth\\.md|pricing\\.md|support\\.md|agents\\.md|agent\\.txt|\\.well-known|wm-widget-sandbox\\.html|mcp-grant\\.html|mcp-grant).*)';
+const dockerignoreSource = readFileSync(resolve(__dirname, '../.dockerignore'), 'utf-8');
+const vercelIgnoreSource = readFileSync(resolve(__dirname, '../scripts/vercel-ignore.sh'), 'utf-8');
+const SPA_HTML_CACHE_SOURCE = '/((?!api|mcp|a2a|ask|oauth|assets|blog|docs|countries|chokepoints|reference|changelog|embed|embed\\.html|favico|map-styles|data|textures|pro|sw\\.js|workbox-[a-f0-9]+\\.js|manifest\\.webmanifest|offline\\.html|robots\\.txt|sitemap\\.xml|llms\\.txt|llms-full\\.txt|openapi\\.yaml|openapi\\.json|auth\\.md|pricing\\.md|support\\.md|ai-search\\.md|agents\\.md|developers\\.md|mcp-server\\.md|openapi\\.md|sdks\\.md|agent\\.txt|\\.well-known|wm-widget-sandbox\\.html|mcp-grant\\.html|mcp-grant).*)';
 const GLOBAL_SECURITY_HEADER_SOURCE = '/((?!docs|embed|embed\\.html).*)';
 const APP_ROOT_HOST_PATTERN = '^(?:(?:www|tech|finance|commodity|happy|energy)\\.)?worldmonitor\\.app$';
 const GLOBAL_CSP_INLINE_SCRIPT_HTML_FILES = [
@@ -46,6 +65,56 @@ const getCacheHeaderValue = (sourcePath) => {
 
 const getHeadersForSource = (sourcePath) => {
   return vercelConfig.headers.find((entry) => entry.source === sourcePath)?.headers ?? [];
+};
+
+// Convert a vercel.json `source` (the path-to-regexp subset used in this file)
+// into a RegExp: literal segments, inline regex groups `(...)` kept raw, and
+// `:name*` catch-all params. Lets tests evaluate which rules match a concrete
+// URL instead of only asserting on a rule in isolation.
+const sourceToRegExp = (source) => {
+  let out = '';
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '(') {
+      let depth = 0;
+      let j = i;
+      for (; j < source.length; j++) {
+        if (source[j] === '(') depth++;
+        else if (source[j] === ')') {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      out += source.slice(i, j + 1);
+      i = j;
+    } else if (ch === ':') {
+      let j = i + 1;
+      while (j < source.length && /[A-Za-z0-9_]/.test(source[j])) j++;
+      if (source[j] === '*') {
+        out = out.replace(/\/$/, '');
+        out += '(?:/.*)?';
+        i = j;
+      } else {
+        out += '[^/]+';
+        i = j - 1;
+      }
+    } else {
+      out += /[.*+?^${}|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+    }
+  }
+  return new RegExp(`^${out}$`);
+};
+
+// Vercel applies every matching `headers` entry in file order; when several
+// set the same header key, the LAST matching rule wins.
+const effectiveCacheControl = (path) => {
+  let value = null;
+  for (const entry of vercelConfig.headers) {
+    if (!sourceToRegExp(entry.source).test(path)) continue;
+    const header = entry.headers?.find((h) => h.key.toLowerCase() === 'cache-control');
+    if (header) value = header.value;
+  }
+  return value;
 };
 
 const getHeaderValueForSource = (sourcePath, key) => {
@@ -99,6 +168,185 @@ const getVariantUrls = () => {
   );
 };
 
+
+describe('crawlable content corpus deployment contracts', () => {
+  const staticCorpusPaths = [
+    '/countries/ukraine/',
+    '/chokepoints/suez-canal/',
+    '/reference/changelog/page/2/',
+  ];
+
+  const getSpaCatchAllRewrite = () => vercelConfig.rewrites.find((r) =>
+    r.destination === DASHBOARD_HTML_DESTINATION && r.source.startsWith('/((?!')
+  );
+
+  const writeFixturePage = (publicDir, relativePath, head = '') => {
+    const target = join(publicDir, relativePath);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, '<!doctype html><html><head>' + head + '</head><body>fixture</body></html>');
+  };
+
+  it('runs content corpus sitemap integration after generated blog pages but before Vite builds', () => {
+    assert.equal(
+      packageJson.scripts['build:crawlable-corpus'],
+      'tsx scripts/build-crawlable-corpus.mjs'
+    );
+    assert.equal(
+      packageJson.scripts['build:content-corpus'],
+      'node scripts/build-content-corpus-sitemap.mjs'
+    );
+
+    for (const scriptName of ['build', 'build:full']) {
+      const script = packageJson.scripts[scriptName];
+      assert.ok(script.includes('npm run build:blog'), scriptName + ' must build the Astro blog first');
+      assert.ok(script.includes('npm run build:crawlable-corpus'), scriptName + ' must build the static corpus');
+      assert.ok(script.includes('npm run build:content-corpus'), scriptName + ' must run content corpus sitemap integration');
+      assert.ok(
+        script.indexOf('npm run build:blog') < script.indexOf('npm run build:crawlable-corpus'),
+        scriptName + ' must build /blog first so existing /blog/glossary remains delegated to the blog sitemap'
+      );
+      assert.ok(
+        script.indexOf('npm run build:crawlable-corpus') < script.indexOf('npm run build:content-corpus'),
+        scriptName + ' must scan the corpus only after the page generator runs'
+      );
+      assert.ok(
+        script.indexOf('npm run build:content-corpus') < script.indexOf('vite build'),
+        scriptName + ' must update public/sitemap.xml before Vite copies public/ into dist/'
+      );
+    }
+
+    for (const [name, source] of [
+      ['Dockerfile', dockerfileSource],
+      ['docker/Dockerfile', frontendDockerfileSource],
+    ]) {
+      assert.ok(source.includes('npm run build:crawlable-corpus'), name + ' must build the static corpus');
+      assert.ok(source.includes('npm run build:content-corpus'), name + ' must update the sitemap block');
+      assert.ok(
+        source.indexOf('npm run build:crawlable-corpus') < source.indexOf('npm run build:content-corpus'),
+        name + ' must scan the sitemap only after corpus pages exist'
+      );
+      assert.ok(
+        source.indexOf('npm run build:content-corpus') < source.indexOf('npx vite build'),
+        name + ' must update public/sitemap.xml before Vite copies public/ into dist/'
+      );
+    }
+  });
+
+  it('builds Vercel when corpus source files change', () => {
+    assert.ok(vercelIgnoreSource.includes("'CHANGELOG.md'"));
+    assert.ok(vercelIgnoreSource.includes("'docs/snapshots/'"));
+  });
+
+  it('keeps corpus inputs available in Docker build contexts', () => {
+    const markdownIgnore = dockerignoreSource.indexOf('*.md');
+    const changelogInclude = dockerignoreSource.indexOf('!CHANGELOG.md');
+    assert.ok(markdownIgnore >= 0, 'expected the broad markdown ignore rule to be present');
+    assert.ok(changelogInclude > markdownIgnore, 'CHANGELOG.md must be re-included after *.md for Docker corpus builds');
+  });
+
+  it('keeps generated corpus prefixes out of the SPA catch-all while preserving normal app deep links', () => {
+    const catchAll = getSpaCatchAllRewrite();
+    assert.ok(catchAll, 'expected the SPA catch-all rewrite');
+    const catchAllMatcher = sourceToRegExp(catchAll.source);
+
+    for (const path of staticCorpusPaths) {
+      assert.equal(
+        catchAllMatcher.test(path),
+        false,
+        path + ' must resolve as raw static HTML, not /dashboard.html'
+      );
+    }
+
+    assert.equal(
+      catchAllMatcher.test('/blog/glossary/country-instability-index/'),
+      false,
+      'existing blog glossary pages stay covered by the /blog static exclusion'
+    );
+    assert.equal(catchAllMatcher.test('/country-intel?iso2=UA'), true);
+  });
+
+  it('serves static corpus HTML with public revalidating cache headers', () => {
+    for (const prefix of CONTENT_CORPUS_PREFIXES) {
+      const expected = 'public, max-age=3600, must-revalidate';
+      assert.equal(getCacheHeaderValue('/' + prefix), expected, '/' + prefix + ' must have a cache policy');
+      assert.equal(getCacheHeaderValue('/' + prefix + '/:path*'), expected, '/' + prefix + '/:path* must have a cache policy');
+      assert.equal(effectiveCacheControl('/' + prefix + '/example/'), expected, '/' + prefix + '/example/ must not inherit SPA HTML cache headers');
+    }
+  });
+
+  it('keeps robots.txt advertising both the root sitemap and the generated blog sitemap', () => {
+    assert.match(robotsSource, /^Sitemap: https:\/\/www\.worldmonitor\.app\/sitemap\.xml$/m);
+    assert.match(robotsSource, /^Sitemap: https:\/\/www\.worldmonitor\.app\/blog\/sitemap-index\.xml$/m);
+  });
+
+  it('keeps a generated-content marker in the root sitemap', () => {
+    assert.ok(sitemapSource.includes('<!-- content-corpus:start -->'));
+    assert.ok(sitemapSource.includes('<!-- content-corpus:end -->'));
+  });
+
+  it('discovers canonical generated corpus pages and validates changelog pagination links', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'wm-content-corpus-'));
+    const publicDir = join(tempRoot, 'public');
+    try {
+      writeFixturePage(
+        publicDir,
+        'countries/ukraine/index.html',
+        '<link rel="canonical" href="https://www.worldmonitor.app/countries/ukraine/" /><meta name="lastmod" content="2026-07-08" />'
+      );
+      writeFixturePage(
+        publicDir,
+        'chokepoints/suez-canal/index.html',
+        '<link rel="canonical" href="https://www.worldmonitor.app/chokepoints/suez-canal/" />'
+      );
+      writeFixturePage(
+        publicDir,
+        'reference/changelog/page/1/index.html',
+        '<link rel="canonical" href="https://www.worldmonitor.app/reference/changelog/page/1/" /><link rel="next" href="https://www.worldmonitor.app/reference/changelog/page/2/" />'
+      );
+      writeFixturePage(
+        publicDir,
+        'reference/changelog/page/2/index.html',
+        '<link rel="canonical" href="https://www.worldmonitor.app/reference/changelog/page/2/" /><link rel="prev" href="https://www.worldmonitor.app/reference/changelog/page/1/" />'
+      );
+
+      const pages = discoverContentCorpusPages({ publicDir });
+      const locations = pages.map((page) => page.loc).sort();
+      assert.deepEqual(locations, [
+        'https://www.worldmonitor.app/reference/changelog/page/1/',
+        'https://www.worldmonitor.app/reference/changelog/page/2/',
+        'https://www.worldmonitor.app/chokepoints/suez-canal/',
+        'https://www.worldmonitor.app/countries/ukraine/',
+      ].sort());
+
+      const block = buildContentCorpusSitemapBlock(pages);
+      assert.match(block, /<loc>https:\/\/www\.worldmonitor\.app\/countries\/ukraine\/<\/loc>/);
+      assert.match(block, /<lastmod>2026-07-08<\/lastmod>/);
+
+      const injected = injectContentCorpusSitemapBlock(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>https://www.worldmonitor.app/</loc></url>\n</urlset>\n',
+        pages
+      );
+      assert.match(injected, /<!-- content-corpus:start -->[\s\S]*\/countries\/ukraine\/[\s\S]*<!-- content-corpus:end -->/);
+      const reinjected = injectContentCorpusSitemapBlock(injected, pages);
+      assert.equal(reinjected, injected, 're-injecting the same pages must be idempotent');
+      assert.equal((reinjected.match(/<!-- content-corpus:start -->/g) ?? []).length, 1);
+      assert.equal((reinjected.match(/<!-- content-corpus:end -->/g) ?? []).length, 1);
+
+      writeFixturePage(
+        publicDir,
+        'reference/changelog/page/3/index.html',
+        '<link rel="canonical" href="https://www.worldmonitor.app/reference/changelog/page/3/" />'
+      );
+      assert.throws(
+        () => discoverContentCorpusPages({ publicDir }),
+        /missing rel="(?:prev|next)" pagination link/
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('deploy/cache configuration guardrails', () => {
   it('requires revalidation for HTML entry routes on Vercel without disabling bfcache', () => {
     // /mcp-grant added to the negative-lookahead by plan 2026-05-10-001 U3 — apex
@@ -140,6 +388,29 @@ describe('deploy/cache configuration guardrails', () => {
   it('keeps immutable caching for hashed static assets', () => {
     assert.equal(
       getCacheHeaderValue('/assets/(.*)'),
+      'public, max-age=31536000, immutable'
+    );
+  });
+
+  it('serves /pro hashed assets immutable — broader /pro rules must not override', () => {
+    // /pro/:path* also matches /pro/assets/*; because the last matching rule
+    // wins per header key, the immutable /pro/assets rule has to be ordered
+    // AFTER the /pro catch-alls or every hashed chunk (including the ~3MB
+    // Clerk bundle) is re-downloaded on each repeat visit.
+    assert.equal(
+      effectiveCacheControl('/pro/assets/clerk-abc123.js'),
+      'public, max-age=31536000, immutable'
+    );
+    assert.equal(
+      effectiveCacheControl('/pro/assets/worldmonitor-7-mar-2026-abc.jpg'),
+      'public, max-age=31536000, immutable'
+    );
+    // HTML entries under /pro keep revalidating.
+    assert.equal(effectiveCacheControl('/pro'), 'private, no-cache, must-revalidate');
+    assert.equal(effectiveCacheControl('/pro/welcome.html'), 'private, no-cache, must-revalidate');
+    // Main-app hashed assets stay immutable end-to-end too.
+    assert.equal(
+      effectiveCacheControl('/assets/index-abc.js'),
       'public, max-age=31536000, immutable'
     );
   });
@@ -347,8 +618,10 @@ describe('welcome landing page routing', () => {
   });
 
   it('rewrites /dashboard to the existing SPA shell', () => {
-    const rewrite = vercelConfig.rewrites.find((r) => r.source === '/dashboard');
-    assert.ok(rewrite, 'expected a rewrite for /dashboard');
+    // Host-conditioned variant rules (#4996) sit in front; the fallback for
+    // every other host is the un-conditioned rule.
+    const rewrite = vercelConfig.rewrites.find((r) => r.source === '/dashboard' && !r.has);
+    assert.ok(rewrite, 'expected an un-conditioned rewrite for /dashboard');
     assert.equal(rewrite.destination, DASHBOARD_HTML_DESTINATION);
   });
 
@@ -394,6 +667,18 @@ describe('welcome landing page routing', () => {
     assert.ok(redirect, 'expected a redirect for /index.html');
     assert.equal(redirect.destination, '/');
     assert.equal(redirect.permanent, true);
+  });
+
+  it('redirects bare corpus roots to canonical generated pages', () => {
+    const changelog = vercelConfig.redirects.find((r) => r.source === '/changelog');
+    assert.ok(changelog, 'expected a redirect for /changelog');
+    assert.equal(changelog.destination, '/reference/changelog/');
+    assert.equal(changelog.permanent, true);
+
+    const reference = vercelConfig.redirects.find((r) => r.source === '/reference');
+    assert.ok(reference, 'expected a redirect for /reference');
+    assert.equal(reference.destination, '/reference/changelog/');
+    assert.equal(reference.permanent, false);
   });
 
   it('requires revalidation for /dashboard HTML without disabling bfcache', () => {
@@ -1660,8 +1945,11 @@ describe('agent readiness: auth.md walkthrough', () => {
   // (#4952), so they get the same three-way pinning as auth.md:
   // explicit markdown Content-Type + CORS, catch-all exclusion (deleting or
   // renaming the static file must 404, not silently serve the dashboard HTML
-  // misleading-200 the journey runs flagged), and this guard.
-  for (const mdPath of ['/pricing.md', '/support.md', '/agents.md']) {
+  // misleading-200 the journey runs flagged), and this guard. /ai-search.md
+  // joined the set with its canonical Link header (#4999): it is
+  // sitemap-listed, and without the catch-all exclusion the SPA cache-header
+  // catch-all (later in the headers array) overrides its max-age rule.
+  for (const mdPath of ['/pricing.md', '/support.md', '/agents.md', '/ai-search.md']) {
     it(`serves ${mdPath} as markdown and keeps it off the SPA catch-all`, () => {
       assert.equal(getHeaderValueForSource(mdPath, 'Content-Type'), 'text/markdown; charset=utf-8');
       assert.equal(getHeaderValueForSource(mdPath, 'Access-Control-Allow-Origin'), '*');
@@ -2124,5 +2412,182 @@ describe('agent readiness: registry branding + ARD catalog', () => {
         aiCatalog.entries.some((e) => e.url.endsWith('/.well-known/agent-skills/index.json')),
       'agent-skills entry must exist iff the skills index is published'
     );
+  });
+});
+
+describe('variant subdomain dashboard SEO (#4996)', () => {
+  // No hardcoded variant list: every set is extracted from its real source
+  // and compared BIDIRECTIONALLY, so adding a variant to any one surface
+  // (middleware host map, generator, vercel.json rewrites) without the
+  // others fails here instead of shipping a subdomain with full-brand meta.
+  const dashboardRewrites = vercelConfig.rewrites.filter((r) => r.source === '/dashboard');
+
+  const rewriteVariants = dashboardRewrites
+    .filter((r) => r.has)
+    .map((r) => {
+      const host = (r.has ?? []).find((h) => h.type === 'host')?.value ?? '';
+      return host.replace('.worldmonitor.app', '');
+    })
+    .sort();
+
+  const middlewareVariants = [...middlewareSource.matchAll(/'([a-z]+)\.worldmonitor\.app': '([a-z]+)'/g)]
+    .map((m) => m[2])
+    .sort();
+
+  const variantHtmlSource = readFileSync(resolve(__dirname, '../src/config/variant-dashboard-html.ts'), 'utf-8');
+  const generatorArrayMatch = variantHtmlSource.match(/WEB_DASHBOARD_VARIANTS = \[([^\]]+)\]/);
+  const generatorVariants = (generatorArrayMatch?.[1] ?? '')
+    .split(',')
+    .map((s) => s.trim().replace(/['"]/g, ''))
+    .filter(Boolean)
+    .sort();
+
+  it('extracted all three variant sets (extraction regressions fail loudly)', () => {
+    assert.ok(rewriteVariants.length > 0, 'no host-conditioned /dashboard rewrites found in vercel.json');
+    assert.ok(middlewareVariants.length > 0, 'VARIANT_HOST_MAP extraction from middleware.ts found nothing');
+    assert.ok(generatorVariants.length > 0, 'WEB_DASHBOARD_VARIANTS extraction from variant-dashboard-html.ts found nothing');
+  });
+
+  it('vercel.json rewrites, middleware host map, and the generator cover the SAME variant set (bidirectional)', () => {
+    assert.deepEqual(rewriteVariants, middlewareVariants, 'vercel.json /dashboard host rewrites vs middleware VARIANT_HOST_MAP diverged');
+    assert.deepEqual(rewriteVariants, generatorVariants, 'vercel.json /dashboard host rewrites vs WEB_DASHBOARD_VARIANTS diverged');
+  });
+
+  it('each variant host rewrite targets its generated variant file', () => {
+    for (const rule of dashboardRewrites.filter((r) => r.has)) {
+      const host = (rule.has ?? []).find((h) => h.type === 'host')?.value ?? '';
+      const variant = host.replace('.worldmonitor.app', '');
+      assert.match(host, /^[a-z]+\.worldmonitor\.app$/, `unexpected host condition shape: ${host}`);
+      assert.strictEqual(
+        rule.destination,
+        `/dashboard-${variant}.html`,
+        `${host} rewrite must target the build-generated variant file`
+      );
+    }
+  });
+
+  it('keeps the host-specific rules BEFORE the generic /dashboard rewrite (order is match priority)', () => {
+    const genericIndex = dashboardRewrites.findIndex((r) => !r.has);
+    assert.ok(genericIndex >= 0, 'generic /dashboard -> /dashboard.html rewrite must exist');
+    assert.strictEqual(
+      genericIndex,
+      dashboardRewrites.length - 1,
+      'the un-conditioned /dashboard rewrite must come last so host rules win'
+    );
+    assert.strictEqual(dashboardRewrites.length, rewriteVariants.length + 1, 'exactly one un-conditioned /dashboard rewrite expected');
+  });
+
+  it('vite build emits the variant dashboard files the rewrites point at (web full build only)', () => {
+    assert.match(
+      viteConfigSource,
+      /!isDesktopBuild && activeVariant === 'full' && variantDashboardHtmlPlugin\(\)/,
+      'variantDashboardHtmlPlugin must be registered for web full builds'
+    );
+  });
+});
+
+describe('markdown canonical Link headers (#4999)', () => {
+  // The sitemap-listed markdown pages are intentionally raw text/markdown for
+  // agents, so they cannot carry a <link rel="canonical">. RFC 6596 allows the
+  // HTTP Link header form; without it these are the only indexable URLs with
+  // no canonical signal at all.
+  const MD_PAGES = ['/pricing.md', '/support.md', '/ai-search.md', '/developers.md', '/mcp-server.md', '/openapi.md', '/sdks.md'];
+
+  for (const page of MD_PAGES) {
+    it(`${page} declares a self-referencing canonical Link header`, () => {
+      assert.strictEqual(
+        getHeaderValueForSource(page, 'Link'),
+        `<https://www.worldmonitor.app${page}>; rel="canonical"`,
+        `${page} must self-canonicalize on the www host via the Link header`
+      );
+      assert.strictEqual(
+        getHeaderValueForSource(page, 'Content-Type'),
+        'text/markdown; charset=utf-8'
+      );
+    });
+  }
+
+  it('every sitemap-listed .md URL has the canonical Link header rule', () => {
+    const sitemap = readFileSync(resolve(__dirname, '../public/sitemap.xml'), 'utf-8');
+    const mdUrls = [...sitemap.matchAll(/<loc>https:\/\/www\.worldmonitor\.app(\/[^<]+\.md)<\/loc>/g)].map((m) => m[1]);
+    assert.ok(mdUrls.length > 0, 'expected .md entries in sitemap.xml');
+    for (const path of mdUrls) {
+      assert.ok(MD_PAGES.includes(path), `${path} is in sitemap.xml but has no canonical Link header rule — add it to vercel.json and this test`);
+    }
+  });
+});
+
+// #4953 — developer-resource discoverability: an agent web-searching "World
+// Monitor MCP server", "World Monitor OpenAPI", "World Monitor developer
+// portal", or "World Monitor SDK" must land on a crawlable page whose H1 names
+// that resource type. Each named page mirrors the auth.md/ai-search.md serving
+// pattern (static public/*.md, excluded from the SPA catch-all, advertised in
+// the discovery chain).
+describe('agent readiness: named developer-resource pages (#4953)', () => {
+  const DEV_PAGES = [
+    { file: 'developers.md', path: '/developers.md', h1: '# World Monitor Developer Portal' },
+    { file: 'mcp-server.md', path: '/mcp-server.md', h1: '# World Monitor MCP Server' },
+    { file: 'openapi.md', path: '/openapi.md', h1: '# World Monitor OpenAPI Specification' },
+    { file: 'sdks.md', path: '/sdks.md', h1: '# World Monitor SDKs' },
+  ];
+
+  const spaCatchAll = () =>
+    vercelConfig.rewrites.find((r) => r.destination === DASHBOARD_HTML_DESTINATION && r.source.startsWith('/((?!'));
+
+  for (const page of DEV_PAGES) {
+    it(`public/${page.file} opens with the brand-named H1 "${page.h1}"`, () => {
+      const body = readFileSync(resolve(__dirname, `../public/${page.file}`), 'utf-8');
+      assert.ok(body.startsWith(`${page.h1}\n`), `public/${page.file} must open with "${page.h1}"`);
+    });
+
+    it(`${page.path} is excluded from the SPA catch-all (serves the static page, not the app shell)`, () => {
+      const catchAll = spaCatchAll();
+      assert.ok(catchAll, 'expected the SPA catch-all rewrite');
+      assert.ok(
+        !sourceToRegExp(catchAll.source).test(page.path),
+        `${page.path} must be excluded from the SPA catch-all rewrite`
+      );
+      assert.ok(
+        !sourceToRegExp(SPA_HTML_CACHE_SOURCE).test(page.path),
+        `${page.path} must be excluded from the pinned HTML-cache catch-all`
+      );
+    });
+  }
+
+  it('advertises the developer portal + resource pages across the discovery chain', () => {
+    // Mirror the #4958 "advertises...on every discovery surface" guard: a page
+    // that is supposed to be advertised everywhere silently going unadvertised
+    // on one surface was a real drift incident. Check the api-catalog plus every
+    // text discovery surface the PR wires (llms.txt, llms-full.txt, agents.md,
+    // api/llms.txt).
+    const catalog = JSON.parse(readFileSync(resolve(__dirname, '../public/.well-known/api-catalog'), 'utf-8'));
+    const catalogHrefs = catalog.linkset.flatMap((ctx) =>
+      Object.values(ctx).flatMap((v) => (Array.isArray(v) ? v.map((e) => e.href) : []))
+    );
+    const surfaces = ['llms.txt', 'llms-full.txt', 'agents.md', 'api/llms.txt'].map((f) => [
+      f,
+      readFileSync(resolve(__dirname, `../public/${f}`), 'utf-8'),
+    ]);
+    // The sitemap and the indexed "Build on World Monitor" blog post are the two
+    // web-search discovery surfaces (candidate fixes #1/#3 of the issue) — assert
+    // them directly so a dropped sitemap entry or blog cross-link is caught here,
+    // not only via the reverse #4999 sitemap->MD_PAGES sweep.
+    const sitemap = readFileSync(resolve(__dirname, '../public/sitemap.xml'), 'utf-8');
+    const blogPost = readFileSync(
+      resolve(__dirname, '../blog-site/src/content/blog/build-on-worldmonitor-developer-api-open-source.md'),
+      'utf-8'
+    );
+    for (const page of DEV_PAGES) {
+      const url = `https://worldmonitor.app${page.path}`;
+      assert.ok(catalogHrefs.includes(url), `api-catalog must advertise ${url}`);
+      for (const [name, content] of surfaces) {
+        assert.ok(content.includes(page.path), `public/${name} must link ${page.path}`);
+      }
+      assert.ok(
+        sitemap.includes(`https://www.worldmonitor.app${page.path}`),
+        `sitemap.xml must register ${page.path} on the www host`
+      );
+      assert.ok(blogPost.includes(page.path), `the developer blog post must cross-link ${page.path}`);
+    }
   });
 });

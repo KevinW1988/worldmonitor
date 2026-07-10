@@ -6726,6 +6726,103 @@ paths:
                                 oneOf:
                                     - $ref: '#/components/schemas/Error'
                                     - $ref: '#/components/schemas/GatewayError'
+    /api/forecast/v1/get-forecast-scorecard:
+        get:
+            tags:
+                - ForecastService
+            summary: GetForecastScorecard
+            description: GetForecastScorecard returns the latest forecast resolution scorecard; degraded distinguishes a backend outage from a healthy empty scorecard.
+            operationId: GetForecastScorecard
+            parameters:
+                - name: jmespath
+                  in: query
+                  description: |-
+                    Optional JMESPath expression applied server-side to project or reduce the JSON response before it is returned (mirrors the MCP jmespath argument). Invalid expressions, expressions larger than 1024 UTF-8 bytes, or projections that exceed the 256 KB output cap return HTTP 400 with a {_jmespath_error, original_keys} envelope. Grammar and worked examples: https://www.worldmonitor.app/docs/mcp-jmespath.
+                  required: false
+                  example: "keys(@)"
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: Successful response
+                    content:
+                        application/json:
+                            example:
+                                "byDomain":
+                                    - "brier": 1.5
+                                      "domain": "example"
+                                      "logScore": 42.5
+                                      "resolved": 1
+                                      "scored": 42
+                                "byGenerationOrigin":
+                                    - "brier": 1.5
+                                      "generationOrigin": "example"
+                                      "logScore": 42.5
+                                      "resolved": 1
+                                      "scored": 42
+                                "calibration":
+                                    - "brier": 1.5
+                                      "bucket": "example"
+                                      "count": 1
+                                      "maxProbability": 1.5
+                                      "minProbability": 1.5
+                                "degraded": true
+                                "error": "example"
+                            schema:
+                                $ref: '#/components/schemas/worldmonitor_forecast_v1_GetForecastScorecardResponse'
+                "400":
+                    description: Validation error
+                    content:
+                        application/json:
+                            schema:
+                                oneOf:
+                                    - $ref: '#/components/schemas/ValidationError'
+                                    - $ref: '#/components/schemas/JmespathProjectionError'
+                "401":
+                    description: Missing or invalid API key.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/UnauthorizedError'
+                "403":
+                    description: API access requires an active subscription (the API key's subscription is inactive or expired).
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ForbiddenError'
+                "429":
+                    description: Rate limit exceeded.
+                    headers:
+                        X-RateLimit-Limit:
+                            description: Maximum requests allowed in the active rate-limit window.
+                            schema:
+                                type: string
+                        X-RateLimit-Remaining:
+                            description: Requests remaining in the active rate-limit window.
+                            schema:
+                                type: string
+                        X-RateLimit-Reset:
+                            description: Unix epoch milliseconds when the active rate-limit window resets.
+                            schema:
+                                type: string
+                        Retry-After:
+                            description: Seconds to wait before retrying the request.
+                            schema:
+                                type: string
+                    content:
+                        application/json:
+                            schema:
+                                oneOf:
+                                    - $ref: '#/components/schemas/Error'
+                                    - $ref: '#/components/schemas/RateLimitError'
+                default:
+                    description: Gateway or handler error response.
+                    content:
+                        application/json:
+                            schema:
+                                oneOf:
+                                    - $ref: '#/components/schemas/Error'
+                                    - $ref: '#/components/schemas/GatewayError'
     /api/forecast/v1/get-simulation-package:
         get:
             tags:
@@ -6857,11 +6954,11 @@ paths:
                     content:
                         application/json:
                             example:
+                                "allTheatersFailed": true
+                                "completionStatus": "example"
+                                "eligibleTheaterCount": 1
                                 "error": "example"
-                                "found": true
-                                "generatedAt": 1717200000000
-                                "note": "example"
-                                "outcomeKey": "example"
+                                "failedTheaterCount": 1
                             schema:
                                 $ref: '#/components/schemas/worldmonitor_forecast_v1_GetSimulationOutcomeResponse'
                 "400":
@@ -21187,6 +21284,11 @@ webhooks:
                 `secret` string verbatim as the HMAC key — do not hex-decode it.
                 Reject the delivery if the signatures differ.
 
+                A verifiable signed sample (fixed secret + exact raw body +
+                resulting signature) is published at
+                https://www.worldmonitor.app/.well-known/webhook-sample.json so you
+                can confirm your HMAC verification end-to-end before registering.
+
                 Respond with any 2xx to acknowledge receipt; a non-2xx response or a
                 timeout marks the delivery failed. `X-WM-Delivery-Id` uniquely
                 identifies each delivery for idempotent processing.
@@ -25554,6 +25656,8 @@ components:
                     format: double
                 demotedBySimulation:
                     type: boolean
+                resolution:
+                    $ref: '#/components/schemas/worldmonitor_forecast_v1_ResolutionSpec'
         worldmonitor_forecast_v1_ForecastSignal:
             type: object
             properties:
@@ -25602,12 +25706,20 @@ components:
                 h24:
                     type: number
                     format: double
+                    description: Projected 24-hour probability after domain-curve normalization.
                 d7:
                     type: number
                     format: double
+                    description: Projected 7-day probability after domain-curve normalization.
                 d30:
                     type: number
                     format: double
+                    description: Projected 30-day probability after domain-curve normalization.
+            description: |-
+                Projections contains bounded presentation-path probabilities derived from
+                 domain curves. Market forecasts are peak-anchored, so the projected value at
+                 the forecast's own time_horizon can intentionally differ from the headline
+                 probability; non-market forecasts preserve their emitted horizon as anchor.
         worldmonitor_forecast_v1_ForecastCase:
             type: object
             properties:
@@ -25739,6 +25851,215 @@ components:
                 probabilityShift:
                     type: number
                     format: double
+        worldmonitor_forecast_v1_ResolutionSpec:
+            type: object
+            properties:
+                kind:
+                    type: string
+                metricKey:
+                    type: string
+                operator:
+                    type: string
+                threshold:
+                    type: number
+                    format: double
+                baselineValue:
+                    type: number
+                    format: double
+                window:
+                    type: string
+                deadline:
+                    type: integer
+                    format: int64
+                    description: 'Warning: Values > 2^53 may lose precision in JavaScript'
+                sourceFeed:
+                    type: string
+                question:
+                    type: string
+            description: |-
+                Machine-checkable resolution spec — makes a forecast a scoreable *bet*.
+                 Every forecast carries exactly one spec, either "hard" or "judged":
+                   - "hard":   auto-resolvable by a free metric comparison against a
+                               WorldMonitor feed the detector already scored from. Sets
+                               metric_key (feed + path expression), operator, threshold,
+                               window, and source_feed (a RESOLUTION_FEED_KEYS allowlist
+                               member). baseline_value is set only when operator is
+                               "crosses" (the emission-time metric value the move is
+                               measured from).
+                   - "judged": resolved by a later LLM judge against the question string;
+                               no numeric threshold, but still a resolution deadline.
+                 kind and operator are strings, not proto enums, mirroring the trend field
+                 above so a new operator/kind never requires a proto migration to land in
+                 the 45-day history. Current kind values are "hard" and "judged"; current
+                 operator values are ">=", "<=", and "crosses".
+                 kind and deadline are always set; every other field is optional and absent
+                 (persisted as JSON null) when it does not apply to the kind — a judged spec
+                 carries no threshold/baseline_value so "no threshold" is never confused
+                 with a real threshold of 0, and a hard spec carries no question.
+        worldmonitor_forecast_v1_GetForecastScorecardRequest:
+            type: object
+        worldmonitor_forecast_v1_GetForecastScorecardResponse:
+            type: object
+            properties:
+                schemaVersion:
+                    type: integer
+                    format: int32
+                generatedAt:
+                    type: integer
+                    format: int64
+                    description: 'Warning: Values > 2^53 may lose precision in JavaScript'
+                rollingWindowDays:
+                    type: integer
+                    format: int32
+                methodology:
+                    type: string
+                totals:
+                    $ref: '#/components/schemas/worldmonitor_forecast_v1_ScorecardTotals'
+                overall:
+                    $ref: '#/components/schemas/worldmonitor_forecast_v1_ScorecardSummary'
+                byDomain:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/worldmonitor_forecast_v1_ScorecardDomainGroup'
+                byGenerationOrigin:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/worldmonitor_forecast_v1_ScorecardGenerationOriginGroup'
+                calibration:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/worldmonitor_forecast_v1_ScorecardCalibrationBucket'
+                vsMarketSkill:
+                    $ref: '#/components/schemas/worldmonitor_forecast_v1_ScorecardMarketSkill'
+                degraded:
+                    type: boolean
+                stale:
+                    type: boolean
+                error:
+                    type: string
+        worldmonitor_forecast_v1_ScorecardTotals:
+            type: object
+            properties:
+                entries:
+                    type: integer
+                    format: int32
+                resolved:
+                    type: integer
+                    format: int32
+                pending:
+                    type: integer
+                    format: int32
+                pendingJudge:
+                    type: integer
+                    format: int32
+                scored:
+                    type: integer
+                    format: int32
+                void:
+                    type: integer
+                    format: int32
+                voidRate:
+                    type: number
+                    format: double
+                publicationCoverage:
+                    type: number
+                    format: double
+        worldmonitor_forecast_v1_ScorecardSummary:
+            type: object
+            properties:
+                count:
+                    type: integer
+                    format: int32
+                brier:
+                    type: number
+                    format: double
+                logScore:
+                    type: number
+                    format: double
+        worldmonitor_forecast_v1_ScorecardDomainGroup:
+            type: object
+            properties:
+                domain:
+                    type: string
+                resolved:
+                    type: integer
+                    format: int32
+                scored:
+                    type: integer
+                    format: int32
+                void:
+                    type: integer
+                    format: int32
+                voidRate:
+                    type: number
+                    format: double
+                brier:
+                    type: number
+                    format: double
+                logScore:
+                    type: number
+                    format: double
+        worldmonitor_forecast_v1_ScorecardGenerationOriginGroup:
+            type: object
+            properties:
+                generationOrigin:
+                    type: string
+                resolved:
+                    type: integer
+                    format: int32
+                scored:
+                    type: integer
+                    format: int32
+                void:
+                    type: integer
+                    format: int32
+                voidRate:
+                    type: number
+                    format: double
+                brier:
+                    type: number
+                    format: double
+                logScore:
+                    type: number
+                    format: double
+        worldmonitor_forecast_v1_ScorecardCalibrationBucket:
+            type: object
+            properties:
+                bucket:
+                    type: string
+                minProbability:
+                    type: number
+                    format: double
+                maxProbability:
+                    type: number
+                    format: double
+                count:
+                    type: integer
+                    format: int32
+                predictedMean:
+                    type: number
+                    format: double
+                realizedRate:
+                    type: number
+                    format: double
+                brier:
+                    type: number
+                    format: double
+        worldmonitor_forecast_v1_ScorecardMarketSkill:
+            type: object
+            properties:
+                count:
+                    type: integer
+                    format: int32
+                forecastBrier:
+                    type: number
+                    format: double
+                marketBrier:
+                    type: number
+                    format: double
+                brierDelta:
+                    type: number
+                    format: double
         worldmonitor_forecast_v1_GetSimulationPackageRequest:
             type: object
             properties:
@@ -25836,6 +26157,22 @@ components:
                          from "your run expired beyond retention" — both previously returned NOT_FOUND.
                          Added in #3734 to prevent the 30-day demand experiment from being contaminated
                          by the queued-vs-expired indistinguishability.
+                eligibleTheaterCount:
+                    type: integer
+                    format: int32
+                    description: Number of theaters eligible for simulation in the package used by this outcome.
+                failedTheaterCount:
+                    type: integer
+                    format: int32
+                    description: Number of eligible theaters that failed before producing a Round 2 result.
+                allTheatersFailed:
+                    type: boolean
+                    description: True when eligible_theater_count > 0 and no theater produced an outcome.
+                completionStatus:
+                    type: string
+                    description: |-
+                        Machine-readable completion status. Current values:
+                         "completed", "partial", "no_eligible_theaters", or "all_theaters_failed".
         worldmonitor_forecast_v1_TriggerSimulationRequest:
             type: object
             properties:
@@ -30034,6 +30371,23 @@ components:
                 dividendCagr:
                     type: number
                     format: double
+                marketSession:
+                    type: string
+                    description: |-
+                        US-equity trading session at analysis time: "regular", "pre", "post" or
+                         "closed". Empty when session detection does not apply (non-US symbols).
+                extendedPrice:
+                    type: number
+                    format: double
+                    description: |-
+                        Latest pre/post-market price from Yahoo extended-hours candles. Only set
+                         when market_session is "pre" or "post" and extended data is available.
+                extendedChangePercent:
+                    type: number
+                    format: double
+                    description: |-
+                        Extended-hours change % vs the last regular-session close. Only set when
+                         extended_price is set.
         worldmonitor_market_v1_StockAnalysisHeadline:
             type: object
             properties:
@@ -32167,6 +32521,17 @@ components:
                          entity-decoded, whitespace-normalised, clipped to 400 chars. Empty string
                          when unavailable or indistinguishable from the headline — consumers must
                          fall back to the headline for display/LLM grounding in that case.
+                tickers:
+                    type: array
+                    items:
+                        type: string
+                        maxItems: 8
+                        description: |-
+                            Equity ticker symbols mentioned by the story, extracted at ingest from
+                             cashtags ($AAPL) and the curated company dictionary
+                             (shared/stocks.json). Uppercase symbols, deduplicated, capped at 8.
+                             Empty when no tracked ticker is mentioned. See shared/ticker-extract.js.
+                    maxItems: 8
             required:
                 - source
                 - title

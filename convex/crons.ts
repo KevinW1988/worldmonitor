@@ -9,6 +9,20 @@ crons.hourly(
   internal.telegramPairingTokens.cleanupExpired,
 );
 
+crons.hourly(
+  "api-plan-limit-usage-scan",
+  { minuteUTC: 17 },
+  internal.apiPlanLimitUsage.scanApiPlanLimitUsageInternal,
+  {},
+);
+
+crons.hourly(
+  "api-plan-limit-email-delivery",
+  { minuteUTC: 18 },
+  internal.apiPlanLimitEmails.sendDuePlanLimitEmails,
+  {},
+);
+
 // PRO-launch broadcast ramp runner. Wakes once a day at 13:00 UTC
 // (~9am ET / 6am PT / 3pm CET — early enough that any kill-gate
 // trip can be triaged within US business hours, late enough that
@@ -16,6 +30,17 @@ crons.hourly(
 // webhook). The action no-ops when no ramp is configured, the ramp
 // is paused, kill-gated, or the prior wave hasn't settled yet —
 // see `convex/broadcast/rampRunner.ts` for the full state machine.
+// Daily retention prune for the plan-limit tables. apiUsageRollups gains a row
+// per user per hourly scan and apiPlanLimitNotices accumulates superseded rows,
+// neither with a native TTL — this ages both out past a 90-day window in
+// bounded per-run batches. See `pruneApiPlanLimitData` in apiPlanLimitNotices.ts.
+crons.daily(
+  "api-plan-limit-prune",
+  { hourUTC: 4, minuteUTC: 45 },
+  internal.apiPlanLimitNotices.pruneApiPlanLimitData,
+  {},
+);
+
 crons.daily(
   "broadcast-ramp-runner",
   { hourUTC: 13, minuteUTC: 0 },
@@ -99,6 +124,17 @@ crons.daily(
   "billing-dunning-scan",
   { hourUTC: 14, minuteUTC: 30 },
   internal.payments.subscriptionEmails.runDunningScan,
+  {},
+);
+
+// Missed-renewal reconciliation (#4765): a renewal that succeeded at Dodo
+// but whose webhook was lost leaves the local sub with a lapsed period —
+// wrongly cutting off a paying customer. Daily sweep refreshes those from
+// Dodo's authoritative state and recomputes entitlements.
+crons.daily(
+  "dodo-renewal-reconciliation",
+  { hourUTC: 3, minuteUTC: 17 },
+  internal.payments.billing.reconcileMissedDodoRenewals,
   {},
 );
 

@@ -3,6 +3,11 @@ import { Redis } from '@upstash/redis';
 import { jsonResponse } from './_json-response.js';
 import { captureSilentError } from './_sentry-edge.js';
 import {
+  durationToSeconds,
+  limitWithFallback,
+  resetRateLimitFallbackForTest,
+} from './_rate-limit-fallback.js';
+import {
   RATE_LIMIT_DEGRADED_HEADERS,
   getClientIp,
 } from './_client-ip.js';
@@ -67,7 +72,7 @@ function getRatelimit(policy) {
 // Mirrored verbatim in server/_shared/rate-limit.ts.
 function rateLimitErrorLevel(stage, msg) {
   if (stage.includes('missing-config')) return 'error';
-  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|socket hang up/i.test(msg)) {
+  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|socket hang up|Redis unavailable|Redis unreachable/i.test(msg)) {
     return 'warning';
   }
   return 'error';
@@ -122,14 +127,36 @@ export async function checkRateLimit(request, corsHeaders, opts = {}) {
 
   const ip = getClientIp(request);
   try {
-    const { success, limit, reset } = await rl.limit(ip);
+    const fallbackPrefix = policy.scope === DEFAULT_RATE_LIMIT_SCOPE ? 'rl:fw' : `rl:${policy.scope}:fw`;
+    const { success, limit, reset } = await limitWithFallback(
+      rl,
+      ip,
+      `${fallbackPrefix}:${ip}`,
+      policy.limit,
+      durationToSeconds(policy.window),
+    );
 
     if (!success) {
+      // `reset` is a Unix epoch in MILLISECONDS (Upstash convention). The IETF
+      // RateLimit fields carry a delta-seconds reset (`t` / RateLimit-Reset),
+      // NOT an epoch, so derive the remaining-seconds view for them and for
+      // Retry-After. The legacy X-RateLimit-Reset stays epoch-ms unchanged.
+      const resetSeconds = Math.max(0, Math.ceil((reset - Date.now()) / 1000));
+      const windowSeconds = durationToSeconds(policy.window);
       return jsonResponse({ error: 'Too many requests' }, 429, {
+        // IETF RateLimit fields (draft-ietf-httpapi-ratelimit-headers). The
+        // combined RateLimit member references the "default" policy advertised
+        // on every API response via vercel.json so an agent can self-throttle.
+        'RateLimit-Policy': `"default";q=${limit};w=${windowSeconds}`,
+        'RateLimit-Limit': String(limit),
+        'RateLimit-Remaining': '0',
+        'RateLimit-Reset': String(resetSeconds),
+        RateLimit: `"default";r=0;t=${resetSeconds}`,
+        // Legacy X-RateLimit-* retained for back-compat (Reset is epoch-ms).
         'X-RateLimit-Limit': String(limit),
         'X-RateLimit-Remaining': '0',
         'X-RateLimit-Reset': String(reset),
-        'Retry-After': String(Math.ceil((reset - Date.now()) / 1000)),
+        'Retry-After': String(resetSeconds),
         ...corsHeaders,
       });
     }
@@ -144,4 +171,5 @@ export async function checkRateLimit(request, corsHeaders, opts = {}) {
 
 export function __resetRateLimitForTest() {
   ratelimits = new Map();
+  resetRateLimitFallbackForTest();
 }

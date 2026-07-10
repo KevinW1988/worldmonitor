@@ -13,7 +13,7 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import yaml from 'js-yaml';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -55,8 +55,17 @@ const INSTRUCTIONS = [
   '- Use `get-prediction-markets` when the user asks what the market odds are on a geopolitical, economic, or election outcome.',
   '- Use `track-tariff-trends` when the user asks how tariffs between two countries changed or what rate a sector faces (Pro-gated).',
   '- Use `track-vessel-traffic` when the user asks what ships are in an area or whether maritime traffic is disrupted (AIS snapshot).',
+  '- Use `assess-energy-shock` when the user asks how a chokepoint disruption could affect a country\'s oil, gas, fuel products, or strategic cover.',
+  '- Use `monitor-energy-disruptions` when the user asks which pipelines, storage facilities, LNG terminals, or fuel assets are disrupted, sanctioned, offline, or under watch.',
+  '- Use `monitor-supply-chain-stress` when the user asks whether container shipping or carrier-market indicators show current supply-chain pressure.',
+  '- Use `trace-trade-flows` when the user asks who trades a strategic commodity, whether flows changed sharply, or which reporter/partner pairs look anomalous (Pro-gated).',
+  '- Use `track-unrest-events` when the user asks about protests, riots, strikes, demonstrations, or civil unrest in a country or time window.',
+  '- Use `monitor-webcams` when the user asks for live visual context near a location, route, border, port, airport, or city.',
+  '- Use `track-climate-hazards` when the user asks about floods, cyclones, droughts, heatwaves, wildfires, climate anomalies, or climate disruption headlines.',
+  '- Use `monitor-health-alerts` when the user asks about disease outbreaks or PM2.5 air-quality health warnings.',
+  '- Use `check-forecast-signals` when the user asks what World Monitor is forecasting, how probabilities shifted, or how calibrated the forecasts are.',
   '',
-  'Beyond these skills the MCP server exposes a broad catalog of tools — energy, climate, health, displacement, natural disasters, and forecasts. Use them together to check whether a live event (a conflict, sanction, or chokepoint disruption) has a plausible market or supply-chain transmission path.',
+  'Beyond these skills the MCP server exposes a broad catalog of tools — displacement, natural disasters, research, imagery, and more. Use them together to check whether a live event (a conflict, sanction, climate hazard, or chokepoint disruption) has a plausible market, health, energy, or supply-chain transmission path.',
   '',
   'When NOT to use: World Monitor is not a general web-search engine, a historical archive, or a trading-execution venue — it places no orders and stores no user documents. For a one-off narrative that needs no correlation across live layers, a plain LLM is cheaper and faster.',
   '',
@@ -69,7 +78,7 @@ const INSTRUCTIONS = [
 
 // Closing fence must be anchored to its own line so values that happen to
 // start with `---` in the body can't prematurely terminate frontmatter.
-const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---(?:\n|$)/;
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
 function sha256Hex(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
@@ -99,7 +108,8 @@ function collectSkills() {
     }
     const bytes = readFileSync(skillPath);
     const md = bytes.toString('utf-8');
-    const fm = parseFrontmatter(md);
+    const lfMd = md.replace(/\r\n/g, '\n');
+    const fm = parseFrontmatter(lfMd);
     if (!fm.description) {
       throw new Error(`${skillPath} missing "description" in frontmatter`);
     }
@@ -133,7 +143,7 @@ function main() {
   const content = build();
   const check = process.argv.includes('--check');
   if (check) {
-    const current = readFileSync(INDEX_PATH, 'utf-8');
+    const current = readFileSync(INDEX_PATH, 'utf-8').replace(/\r\n/g, '\n');
     if (current !== content) {
       process.stderr.write(
         'agent-skills index.json is out of date. Run `npm run build:agent-skills`.\n',
@@ -147,6 +157,7 @@ function main() {
   process.stdout.write(`Wrote ${INDEX_PATH}\n`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
   main();
 }

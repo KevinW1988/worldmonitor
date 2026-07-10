@@ -2,6 +2,8 @@ import { Ratelimit, type Duration } from '@upstash/ratelimit';
 import { Redis } from '@upstash/redis';
 // @ts-expect-error — JS module, no declaration file
 import { captureSilentError } from '../../api/_sentry-edge.js';
+// @ts-expect-error — JS module, no declaration file
+import { durationToSeconds, limitWithFallback, resetRateLimitFallbackForTest } from '../../api/_rate-limit-fallback.js';
 
 // @upstash/redis defaults to 5 retries with exponential backoff (~4.3s total)
 // before surfacing an unreachable-Redis error. The node test runner sets
@@ -14,6 +16,9 @@ import { captureSilentError } from '../../api/_sentry-edge.js';
 const REDIS_TEST_RETRY_OPTS: { retry?: false } = process.env.NODE_TEST_CONTEXT ? { retry: false } : {};
 
 let ratelimit: Ratelimit | null = null;
+const GLOBAL_RATE_LIMIT = 600;
+const GLOBAL_RATE_WINDOW: Duration = '60 s';
+const GLOBAL_RATE_WINDOW_SECONDS = durationToSeconds(GLOBAL_RATE_WINDOW);
 
 function getRatelimit(): Ratelimit | null {
   if (ratelimit) return ratelimit;
@@ -23,7 +28,7 @@ function getRatelimit(): Ratelimit | null {
 
   ratelimit = new Ratelimit({
     redis: new Redis({ url, token, ...REDIS_TEST_RETRY_OPTS }),
-    limiter: Ratelimit.slidingWindow(600, '60 s'),
+    limiter: Ratelimit.slidingWindow(GLOBAL_RATE_LIMIT, GLOBAL_RATE_WINDOW),
     prefix: 'rl',
     analytics: false,
   });
@@ -53,7 +58,7 @@ export const UNKNOWN_CLIENT_IP = 'unknown';
 // Mirrored verbatim in api/_rate-limit.js.
 function rateLimitErrorLevel(stage: string, msg: string): 'warning' | 'error' {
   if (stage.includes('missing-config')) return 'error';
-  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|socket hang up/i.test(msg)) {
+  if (/Error running script|execution timed out|Command failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|fetch failed|network|timed out|socket hang up|Redis unavailable|Redis unreachable/i.test(msg)) {
     return 'warning';
   }
   return 'error';
@@ -129,15 +134,29 @@ export function getClientIp(request: Request): string {
   return xr || UNKNOWN_CLIENT_IP;
 }
 
-function tooManyRequestsResponse(limit: number, reset: number, corsHeaders: Record<string, string>): Response {
+function tooManyRequestsResponse(limit: number, reset: number, corsHeaders: Record<string, string>, windowSeconds: number): Response {
+  // `reset` is a Unix epoch in MILLISECONDS (Upstash). IETF RateLimit fields
+  // carry a delta-seconds reset (`t` / RateLimit-Reset), NOT an epoch — derive
+  // it here. Legacy X-RateLimit-Reset stays epoch-ms for back-compat.
+  const resetSeconds = Math.max(0, Math.ceil((reset - Date.now()) / 1000));
   return new Response(JSON.stringify({ error: 'Too many requests' }), {
     status: 429,
     headers: {
       'Content-Type': 'application/json',
+      // IETF RateLimit fields (draft-ietf-httpapi-ratelimit-headers). The
+      // combined RateLimit member references the "default" policy advertised on
+      // every API response via vercel.json so agents can self-throttle. Mirrors
+      // api/_rate-limit.js.
+      'RateLimit-Policy': `"default";q=${limit};w=${windowSeconds}`,
+      'RateLimit-Limit': String(limit),
+      'RateLimit-Remaining': '0',
+      'RateLimit-Reset': String(resetSeconds),
+      RateLimit: `"default";r=0;t=${resetSeconds}`,
+      // Legacy X-RateLimit-* retained for back-compat (Reset is epoch-ms).
       'X-RateLimit-Limit': String(limit),
       'X-RateLimit-Remaining': '0',
       'X-RateLimit-Reset': String(reset),
-      'Retry-After': String(Math.ceil((reset - Date.now()) / 1000)),
+      'Retry-After': String(resetSeconds),
       ...corsHeaders,
     },
   });
@@ -179,10 +198,10 @@ export async function checkRateLimit(request: Request, corsHeaders: Record<strin
   const ip = getClientIp(request);
 
   try {
-    const { success, limit, reset } = await rl.limit(ip);
+    const { success, limit, reset } = await limitWithFallback(rl, ip, `rl:fw:${ip}`, GLOBAL_RATE_LIMIT, GLOBAL_RATE_WINDOW_SECONDS);
 
     if (!success) {
-      return tooManyRequestsResponse(limit, reset, corsHeaders);
+      return tooManyRequestsResponse(limit, reset, corsHeaders, GLOBAL_RATE_WINDOW_SECONDS);
     }
 
     return null;
@@ -400,12 +419,17 @@ export async function checkEndpointRateLimit(request: Request, pathname: string,
   }
 
   const ip = getClientIp(request);
+  const policy = ENDPOINT_RATE_POLICIES[pathname];
+  // hasEndpointRatePolicy(pathname) above already guarantees this — the
+  // extra check exists only to satisfy noUncheckedIndexedAccess, since TS
+  // can't carry that narrowing across a second independent index lookup.
+  if (!policy) return null;
 
   try {
-    const { success, limit, reset } = await rl.limit(`${pathname}:${ip}`);
+    const { success, limit, reset } = await limitWithFallback(rl, `${pathname}:${ip}`, `rl:ep:fw:${pathname}:${ip}`, policy.limit, durationToSeconds(policy.window));
 
     if (!success) {
-      return tooManyRequestsResponse(limit, reset, corsHeaders);
+      return tooManyRequestsResponse(limit, reset, corsHeaders, durationToSeconds(policy.window));
     }
 
     return null;
@@ -478,7 +502,7 @@ export async function checkScopedRateLimit(scope: string, limit: number, window:
     return { allowed: true, limit, reset: 0, degraded: true };
   }
   try {
-    const result = await rl.limit(`${scope}:${identifier}`);
+    const result = await limitWithFallback(rl, `${scope}:${identifier}`, `rl:scope:fw:${scope}:${identifier}`, limit, durationToSeconds(window));
     return {
       allowed: result.success,
       limit: result.limit,
@@ -489,4 +513,12 @@ export async function checkScopedRateLimit(scope: string, limit: number, window:
     logRateLimitDegraded(`checkScopedRateLimit:${scope}`, err);
     return { allowed: true, limit, reset: 0, degraded: true };
   }
+}
+
+export function __resetRateLimitForTest(): void {
+  ratelimit = null;
+  endpointLimiters.clear();
+  scopedLimiters.clear();
+  scopedMissingConfigStages.clear();
+  resetRateLimitFallbackForTest();
 }
