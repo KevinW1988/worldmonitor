@@ -274,9 +274,10 @@ describe('crawlable content corpus deployment contracts', () => {
     }
   });
 
-  it('keeps robots.txt advertising both the root sitemap and the generated blog sitemap', () => {
+  it('keeps robots.txt advertising root, blog, and Mintlify docs sitemaps', () => {
     assert.match(robotsSource, /^Sitemap: https:\/\/www\.worldmonitor\.app\/sitemap\.xml$/m);
     assert.match(robotsSource, /^Sitemap: https:\/\/www\.worldmonitor\.app\/blog\/sitemap-index\.xml$/m);
+    assert.match(robotsSource, /^Sitemap: https:\/\/www\.worldmonitor\.app\/docs\/sitemap\.xml$/m);
   });
 
   it('keeps a generated-content marker in the root sitemap', () => {
