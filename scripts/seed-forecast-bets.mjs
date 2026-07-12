@@ -139,12 +139,17 @@ async function main() {
       await redisPipeline(['LTRIM', BETS_HISTORY_KEY, 0, BETS_MAX_RUNS - 1]);
       await redisPipeline(['EXPIRE', BETS_HISTORY_KEY, BETS_TTL_SECONDS]);
       await redisPipeline(['SET', BETS_SERIES_KEY, JSON.stringify(nextSeries), 'EX', SERIES_TTL_SECONDS]);
-      console.log(`  [bets] published ${count} shadow energy bet(s) -> ${BETS_HISTORY_KEY}`);
+      const byDomain = snapshot.predictions.reduce((acc, b) => {
+        acc[b.domain] = (acc[b.domain] || 0) + 1;
+        return acc;
+      }, {});
+      const breakdown = Object.entries(byDomain).map(([d, n]) => `${d}:${n}`).join(', ');
+      console.log(`  [bets] published ${count} shadow bet(s) [${breakdown}] -> ${BETS_HISTORY_KEY}`);
       for (const bet of snapshot.predictions) {
         console.log(`    - ${bet.question} (p=${bet.probability})`);
       }
     } else {
-      console.warn('  [bets] no energy bets generated (feeds absent/unusable); nothing appended');
+      console.warn('  [bets] no bets generated (feeds absent/unusable); nothing appended');
     }
     await writeFreshnessMetadata('forecast', 'bets', count, 'bet-engine:v1', BETS_TTL_SECONDS);
   } catch (err) {

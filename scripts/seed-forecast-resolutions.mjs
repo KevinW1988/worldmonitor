@@ -1089,8 +1089,15 @@ export function shapeResolutionFeed(key, data) {
     // descends into ARRAY children, so the doubly-nested quotes array is
     // invisible as-is — expose it directly so `price(symbol==<SYM>)` resolves.
     // (Also unblocks the pre-existing market commodity-price forecast path.)
+    // Quotes carry no per-symbol timestamp; stamp each with the envelope's
+    // `_seed.fetchedAt` as `asOf` so the settlement gate can refuse to resolve a
+    // stale kept-warm quote (extendExistingTtl preserves the old fetchedAt) as
+    // if it were the deadline-time price.
+    const fetchedAt = Number(data?._seed?.fetchedAt);
     const d = data?.data ?? data;
-    if (Array.isArray(d?.quotes)) return d.quotes;
+    if (Array.isArray(d?.quotes)) {
+      return d.quotes.map((q) => (q && typeof q === 'object' && Number.isFinite(fetchedAt) ? { ...q, asOf: fetchedAt } : q));
+    }
     return d;
   }
   return data;

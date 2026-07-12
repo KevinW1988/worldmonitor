@@ -61,12 +61,15 @@ export function resolveHardSpec(entry, feedData, samples, nowMs) {
     return { status: 'pending', evidence: { reason: 'deadline_not_reached', deadline } };
   }
 
-  // Settlement gate for scalar `value` reads (energy/economic bet engine). Like
-  // count(), a premature read scores a false NO: period feeds (e.g. EIA's weekly
-  // release, dated by `asOf`) may still hold the PRIOR period's value when the
-  // resolver ticks on the deadline. Only resolve once the feed carries a reading
-  // dated on/after the deadline day; pend until then, VOID if it never settles.
-  if (parsed.fn === 'value') {
+  // Settlement gate for scalar `value`/`price` reads (energy/economic/commodity
+  // bet engine). Like count(), a premature or STALE read scores a false YES/NO:
+  // a period feed (EIA weekly, dated by `asOf`) may still hold the prior period's
+  // value, and a live feed kept warm through a fetch failure (commodities, whose
+  // shaper stamps each quote with the envelope `_seed.fetchedAt` as `asOf`) may
+  // hold a quote dated days before the deadline. Only resolve once the matched
+  // record is dated on/after the deadline day; pend until then, VOID if it never
+  // settles. Records with no timestamp fall through (cannot gate).
+  if (parsed.fn === 'value' || parsed.fn === 'price') {
     const settle = valueSettlementResult(parsed, feedData, deadline, nowMs, entry, spec);
     if (settle) return settle;
   }

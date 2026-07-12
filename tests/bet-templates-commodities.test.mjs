@@ -82,38 +82,62 @@ describe('commodity bet templates (fast-resolving lane)', () => {
 });
 
 describe('shapeResolutionFeed exposes the nested commodities quotes array', () => {
-  it('unwraps {_seed,data:{quotes}} to the quotes array so price() resolves', () => {
-    const shaped = shapeResolutionFeed(COMMODITY_FEED, { _seed: {}, data: commoditiesFixture() });
+  it('unwraps {_seed,data:{quotes}} to the quotes array and stamps asOf', () => {
+    const fetchedAt = Date.parse('2026-07-16T06:00:00Z');
+    const shaped = shapeResolutionFeed(COMMODITY_FEED, { _seed: { fetchedAt }, data: commoditiesFixture() });
     assert.ok(Array.isArray(shaped));
-    assert.equal(shaped.find((q) => q.symbol === 'CL=F').price, 71.41);
+    const cl = shaped.find((q) => q.symbol === 'CL=F');
+    assert.equal(cl.price, 71.41);
+    assert.equal(cl.asOf, fetchedAt); // envelope fetchedAt carried onto each quote
   });
 });
 
-describe('commodity bets resolve end-to-end (no settlement gate — live price)', () => {
+// Fresh quote dated on/after the deadline; deadline is 2026-07-16.
+function shapedFeed(price, fetchedAtIso) {
+  return shapeResolutionFeed(COMMODITY_FEED, {
+    _seed: { fetchedAt: Date.parse(fetchedAtIso) },
+    data: { quotes: [{ symbol: 'CL=F', price, change: -0.5 }] },
+  });
+}
+
+describe('commodity bets resolve end-to-end (settlement-gated on quote freshness)', () => {
   function wtiBet() {
     const bets = generateBets(COMMODITY_BET_TEMPLATES, { [COMMODITY_FEED]: commoditiesFixture() }, NOW);
     const bet = bets.find((b) => b.resolution.metricKey.includes('symbol==CL=F'));
     return { spec: bet.resolution, generationOrigin: bet.generationOrigin, generatedAt: NOW };
   }
 
-  it('resolves YES when the price falls past the threshold at the deadline', () => {
-    const feed = shapeResolutionFeed(COMMODITY_FEED, { data: { quotes: [{ symbol: 'CL=F', price: 69.0, change: 0 }] } });
-    const res = resolveHardSpec(wtiBet(), feed, [], DEADLINE + DAY_MS);
+  it('resolves YES when a fresh quote falls past the threshold', () => {
+    const res = resolveHardSpec(wtiBet(), shapedFeed(69.0, '2026-07-16T06:00:00Z'), [], DEADLINE + DAY_MS);
     assert.equal(res.status, 'resolved');
-    assert.equal(res.outcome, 'YES'); // 69.0 <= 69.62475 (falling bet)
+    assert.equal(res.outcome, 'YES'); // 69.0 <= 69.62 (falling bet), fresh quote
   });
 
-  it('resolves NO when the price stays above the threshold', () => {
-    const feed = shapeResolutionFeed(COMMODITY_FEED, { data: { quotes: [{ symbol: 'CL=F', price: 70.5, change: 0 }] } });
-    const res = resolveHardSpec(wtiBet(), feed, [], DEADLINE + DAY_MS);
+  it('resolves NO when a fresh quote stays above the threshold', () => {
+    const res = resolveHardSpec(wtiBet(), shapedFeed(70.5, '2026-07-16T06:00:00Z'), [], DEADLINE + DAY_MS);
     assert.equal(res.status, 'resolved');
     assert.equal(res.outcome, 'NO');
   });
 
   it('pends before the deadline', () => {
-    const feed = shapeResolutionFeed(COMMODITY_FEED, { data: commoditiesFixture() });
+    const feed = shapeResolutionFeed(COMMODITY_FEED, { _seed: { fetchedAt: NOW }, data: commoditiesFixture() });
     const res = resolveHardSpec(wtiBet(), feed, [], NOW + DAY_MS);
     assert.equal(res.status, 'pending');
+  });
+
+  it('does NOT resolve a stale kept-warm quote as a deadline price (P2 regression)', () => {
+    // Quote fetched two days BEFORE the deadline (fetch-failure keep-warm) —
+    // must pend, not record a false YES against a pre-deadline price.
+    const stale = shapedFeed(69.0, '2026-07-14T06:00:00Z'); // 2 days pre-deadline
+    const res = resolveHardSpec(wtiBet(), stale, [], DEADLINE + DAY_MS);
+    assert.equal(res.status, 'pending');
+    assert.equal(res.evidence.reason, 'value_source_not_settled');
+  });
+
+  it('VOIDs a quote that never freshens past the settlement grace', () => {
+    const stale = shapedFeed(69.0, '2026-07-14T06:00:00Z');
+    const res = resolveHardSpec(wtiBet(), stale, [], DEADLINE + 11 * DAY_MS);
+    assert.equal(res.outcome, 'VOID');
   });
 });
 
