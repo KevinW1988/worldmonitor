@@ -276,11 +276,11 @@ describe('#4580 boot skeleton <-> app footprint parity', () => {
     // #5205 review P1: this read runs BEFORE the shell installs — a bare
     // localStorage access throws under blocked storage (SecurityError) and
     // would strand users on the boot skeleton. The helper must route through
-    // the try/catch-guarded loadFromStorage with an expanded default.
+    // the try/catch-guarded loadFromStorage with the feed-first collapsed default.
     assert.match(
       panelLayout,
-      /private static isMobileMapCollapsedPreferred\(\): boolean \{\s*return loadFromStorage<boolean>\('mobile-map-collapsed', false\) === true;/,
-      'the collapse-pref read must use guarded loadFromStorage, defaulting to expanded',
+      /private static isMobileMapCollapsedPreferred\(\): boolean \{\s*return loadFromStorage<boolean>\('mobile-map-collapsed', true\) === true;/,
+      'the collapse-pref read must use guarded loadFromStorage, defaulting to the mobile Today state',
     );
     assert.doesNotMatch(
       panelLayout,

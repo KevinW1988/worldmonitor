@@ -1109,7 +1109,7 @@ export class App {
     this.searchManager?.updateFlightSource(adsb, military);
   }
 
-  private async openSearch(options: { toggle?: boolean; throwOnFailure?: boolean } = {}): Promise<void> {
+  private async openSearch(options: { toggle?: boolean; throwOnFailure?: boolean; replaceOverlayId?: string } = {}): Promise<void> {
     // Concurrency model: each press registers its intent, then claims a
     // monotonic epoch. After the lazy load resolves, only the latest epoch acts
     // — superseded presses bail. This yields one deterministic modal.open() for
@@ -1142,7 +1142,7 @@ export class App {
       manager.updateSearchIndex();
       const modal = this.state.searchModal;
       if (!modal) throw new Error('Search modal is not initialised');
-      modal.open();
+      modal.open(options.replaceOverlayId);
     } catch (error) {
       if (!this.state.isDestroyed) {
         console.warn('[search] Failed to load search manager:', error);

@@ -148,6 +148,7 @@ async function loadCountryDeepDivePanel(options = {}) {
     `],
     ['utils-stub', `
       export function getCSSColor() { return '#44ff88'; }
+      export function isMobileDevice() { return false; }
       export function showToast(msg) { globalThis.__wmCountryDeepDiveTestState.toasts.push(msg); }
       export function createCircuitBreaker() { return { execute: (fn) => fn() }; }
       export function loadFromStorage() { return null; }

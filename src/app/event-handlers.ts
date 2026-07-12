@@ -95,6 +95,7 @@ import { scheduleAfterFirstPaint } from '@/utils/after-paint';
 import { escapeHtml } from '@/utils/sanitize';
 import { buildEmbedIframeSnippet, buildEmbedMapUrl, type EmbedVariant } from '@/embed/embed-url';
 import { createSettingsButton } from '@/components/settings-button';
+import { overlayHistory } from '@/utils/overlay-history';
 
 function readStorageValue(key: string): string | null {
   try {
@@ -136,9 +137,9 @@ class LazyUnifiedSettings implements UnifiedSettingsController {
     return this.button;
   }
 
-  open(tab?: UnifiedSettingsTabId): void {
+  open(tab?: UnifiedSettingsTabId, replaceOverlayId?: string): void {
     void this.load().then((settings) => {
-      if (!this.destroyed) settings.open(tab);
+      if (!this.destroyed) settings.open(tab, replaceOverlayId);
     }).catch((error) => {
       // A rejection because the controller was torn down mid-load is a
       // deliberate unmount, not a failure the user should be toasted about.
@@ -185,7 +186,7 @@ class LazyUnifiedSettings implements UnifiedSettingsController {
 
 
 export interface EventHandlerCallbacks {
-  openSearch: (options?: { toggle?: boolean }) => void;
+  openSearch: (options?: { toggle?: boolean; replaceOverlayId?: string }) => void;
   updateSearchIndex: () => void;
   updateFlightSource?: (adsb: PositionSample[], military: MilitaryFlight[]) => void;
   loadAllData: () => Promise<void>;
@@ -224,6 +225,12 @@ export class EventHandlerManager implements AppModule {
   private boundMapFullscreenEscHandler: ((e: KeyboardEvent) => void) | null = null;
   private readonly registeredSearchButtons = new Set<string>();
   private boundSearchKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+  private mobileTabBar: HTMLElement | null = null;
+  private boundMobileTabClickHandler: ((e: MouseEvent) => void) | null = null;
+  private mobileAuthFallback: HTMLButtonElement | null = null;
+  private boundMobileAuthHandler: (() => void) | null = null;
+  private mobileMenuOpenFrame: number | null = null;
+  private regionSheetOpenFrame: number | null = null;
   private boundMobileMenuKeyHandler: ((e: KeyboardEvent) => void) | null = null;
   private boundPanelCloseHandler: ((e: Event) => void) | null = null;
   private boundWidgetModifyHandler: ((e: Event) => void) | null = null;
@@ -234,7 +241,8 @@ export class EventHandlerManager implements AppModule {
   private boundEmbedModalKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
   private missionPresetPopover: HTMLElement | null = null;
   private missionDataRefreshTimer: number | null = null;
-  private proGateUnsubscribers: Array<() => void> = [];
+  private authStateUnsubscribers: Array<() => void> = [];
+  private mobileAuthWidget: AuthHeaderWidget | null = null;
   private exportPanelLoad: Promise<NonNullable<AppContext['exportPanel']>> | null = null;
   private closedPanelStack: string[] = []; // max-items: 20
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -245,7 +253,9 @@ export class EventHandlerManager implements AppModule {
   private readonly debouncedUrlSync = debounce(() => {
     const shareUrl = this.getShareUrl();
     if (!shareUrl) return;
-    try { history.replaceState(null, '', shareUrl); } catch { }
+    // Preserve the shared mobile-overlay marker while syncing map URL state;
+    // replacing it with null makes Android Back skip the open sheet.
+    try { history.replaceState(history.state, '', shareUrl); } catch { }
   }, 250);
 
   private readonly debouncedWebcamReload = debounce(() => {
@@ -262,6 +272,7 @@ export class EventHandlerManager implements AppModule {
   init(): void {
     this.setupSearchControls();
     this.setupEventListeners();
+    this.setupMobileTabBar();
     this.setupIdleDetection();
     this.setupTvMode();
   }
@@ -440,6 +451,20 @@ export class EventHandlerManager implements AppModule {
       document.removeEventListener('keydown', this.boundSearchKeyHandler);
       this.boundSearchKeyHandler = null;
     }
+    if (this.mobileTabBar && this.boundMobileTabClickHandler) {
+      this.mobileTabBar.removeEventListener('click', this.boundMobileTabClickHandler);
+      this.mobileTabBar = null;
+      this.boundMobileTabClickHandler = null;
+    }
+    if (this.mobileAuthFallback && this.boundMobileAuthHandler) {
+      this.mobileAuthFallback.removeEventListener('click', this.boundMobileAuthHandler);
+      this.mobileAuthFallback = null;
+      this.boundMobileAuthHandler = null;
+    }
+    if (this.mobileMenuOpenFrame !== null) cancelAnimationFrame(this.mobileMenuOpenFrame);
+    if (this.regionSheetOpenFrame !== null) cancelAnimationFrame(this.regionSheetOpenFrame);
+    this.mobileMenuOpenFrame = null;
+    this.regionSheetOpenFrame = null;
     if (this.boundMobileMenuKeyHandler) {
       document.removeEventListener('keydown', this.boundMobileMenuKeyHandler);
       this.boundMobileMenuKeyHandler = null;
@@ -468,16 +493,19 @@ export class EventHandlerManager implements AppModule {
       window.clearTimeout(this.missionDataRefreshTimer);
       this.missionDataRefreshTimer = null;
     }
-    for (const unsub of this.proGateUnsubscribers) unsub();
-    this.proGateUnsubscribers = [];
+    for (const unsub of this.authStateUnsubscribers) unsub();
+    this.authStateUnsubscribers = [];
     this.ctx.tvMode?.destroy();
     this.ctx.tvMode = null;
     this.ctx.unifiedSettings?.destroy();
     this.ctx.unifiedSettings = null;
     this.ctx.authHeaderWidget?.destroy();
     this.ctx.authHeaderWidget = null;
+    this.mobileAuthWidget?.destroy();
+    this.mobileAuthWidget = null;
     this.ctx.authModal?.destroy();
     this.ctx.authModal = null;
+    overlayHistory.reset();
   }
 
   setupSearchControls(): void {
@@ -498,7 +526,6 @@ export class EventHandlerManager implements AppModule {
     };
     wireSearchButton('searchBtn', 'desktop');
     wireSearchButton('mobileSearchBtn', 'mobile');
-    wireSearchButton('searchMobileFab', 'fab');
     if (!this.boundSearchKeyHandler) {
       this.boundSearchKeyHandler = (e: KeyboardEvent) => {
         // !e.shiftKey so Cmd/Ctrl+Shift+K (e.g. Firefox web console) doesn't
@@ -738,14 +765,96 @@ export class EventHandlerManager implements AppModule {
     }
   }
 
+  private setupMobileTabBar(): void {
+    const tabBar = document.getElementById('mobileTabBar');
+    if (!tabBar || this.boundMobileTabClickHandler) return;
+
+    const setActive = (tab: string): void => {
+      tabBar.querySelectorAll<HTMLButtonElement>('[data-mobile-tab]').forEach((button) => {
+        const active = button.dataset.mobileTab === tab;
+        button.classList.toggle('active', active);
+        if (active) button.setAttribute('aria-current', 'page');
+        else button.removeAttribute('aria-current');
+      });
+    };
+
+    const exitMapTab = (): void => {
+      const mapSection = document.getElementById('mapSection');
+      if (mapSection?.classList.contains('live-news-fullscreen')) {
+        document.getElementById('mapFullscreenBtn')?.click();
+      }
+    };
+
+    const collapseMap = (): void => {
+      const mapSection = document.getElementById('mapSection');
+      if (mapSection && !mapSection.classList.contains('collapsed')) {
+        document.querySelector<HTMLButtonElement>('.map-collapse-btn')?.click();
+      }
+    };
+
+    this.mobileTabBar = tabBar;
+    this.boundMobileTabClickHandler = (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-mobile-tab]');
+      const tab = button?.dataset.mobileTab;
+      if (!tab) return;
+
+      switch (tab) {
+        case 'today': {
+          exitMapTab();
+          collapseMap();
+          document.getElementById('main')?.scrollTo({ top: 0, behavior: 'smooth' });
+          break;
+        }
+        case 'map': {
+          const mapSection = document.getElementById('mapSection');
+          if (mapSection && !mapSection.classList.contains('live-news-fullscreen')) {
+            document.getElementById('mapFullscreenBtn')?.click();
+          }
+          break;
+        }
+        case 'search':
+          exitMapTab();
+          {
+            const replacesMenu = document.getElementById('mobileMenu')?.classList.contains('open') ?? false;
+            this.closeMobileMenu(replacesMenu);
+            track('search-open', { source: 'mobile-tab' });
+            this.callbacks.openSearch(replacesMenu ? { replaceOverlayId: 'menu' } : undefined);
+          }
+          break;
+        case 'alerts': {
+          exitMapTab();
+          collapseMap();
+          const panel = document.querySelector<HTMLElement>(
+            '#panelsGrid [data-panel="strategic-risk"]:not(.hidden), #panelsGrid [data-panel="oref-sirens"]:not(.hidden), #panelsGrid [data-panel="intel"]:not(.hidden)',
+          );
+          if (panel?.dataset.panel) {
+            window.dispatchEvent(new CustomEvent('wm:reveal-panel', {
+              detail: { panelId: panel.dataset.panel },
+            }));
+            requestAnimationFrame(() => panel.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+          } else {
+            showToast('No active alerts yet');
+          }
+          break;
+        }
+        case 'more':
+          exitMapTab();
+          this.openMobileMenu();
+          break;
+        default:
+          return;
+      }
+      setActive(tab);
+    };
+    tabBar.addEventListener('click', this.boundMobileTabClickHandler);
+  }
+
   private setupMobileMenu(): void {
-    const hamburger = document.getElementById('hamburgerBtn');
     const overlay = document.getElementById('mobileMenuOverlay');
     const menu = document.getElementById('mobileMenu');
     const closeBtn = document.getElementById('mobileMenuClose');
-    if (!hamburger || !overlay || !menu || !closeBtn) return;
+    if (!overlay || !menu || !closeBtn) return;
 
-    hamburger.addEventListener('click', () => this.openMobileMenu());
     overlay.addEventListener('click', () => this.closeMobileMenu());
     closeBtn.addEventListener('click', () => this.closeMobileMenu());
 
@@ -759,13 +868,13 @@ export class EventHandlerManager implements AppModule {
     });
 
     document.getElementById('mobileMenuRegion')?.addEventListener('click', () => {
-      this.closeMobileMenu();
-      this.openRegionSheet();
+      this.closeMobileMenu(true);
+      this.openRegionSheet(true);
     });
 
     document.getElementById('mobileMenuSettings')?.addEventListener('click', () => {
-      this.closeMobileMenu();
-      this.ctx.unifiedSettings?.open();
+      this.closeMobileMenu(true);
+      this.ctx.unifiedSettings?.open(undefined, 'menu');
     });
 
     document.getElementById('mobileMenuTheme')?.addEventListener('click', () => {
@@ -813,9 +922,10 @@ export class EventHandlerManager implements AppModule {
   private setupMissionPresets(): void {
     this.renderMissionPresetControl();
 
-    document.getElementById('mobileMenuMission')?.addEventListener('click', () => {
+    const mobileMissionButton = document.getElementById('mobileMenuMission');
+    mobileMissionButton?.addEventListener('click', () => {
       this.closeMobileMenu();
-      this.openMissionPresetPopover(document.getElementById('hamburgerBtn'), true);
+      this.openMissionPresetPopover(mobileMissionButton, true);
     });
 
     const shouldPrompt =
@@ -1146,41 +1256,59 @@ export class EventHandlerManager implements AppModule {
     this.closeMissionPresetPopover();
   }
 
-  private openMobileMenu(): void {
+  private openMobileMenu(fromHistory = false): void {
     const overlay = document.getElementById('mobileMenuOverlay');
     const menu = document.getElementById('mobileMenu');
     if (!overlay || !menu) return;
     overlay.classList.add('open');
-    requestAnimationFrame(() => menu.classList.add('open'));
+    if (this.mobileMenuOpenFrame !== null) cancelAnimationFrame(this.mobileMenuOpenFrame);
+    this.mobileMenuOpenFrame = requestAnimationFrame(() => {
+      this.mobileMenuOpenFrame = null;
+      menu.classList.add('open');
+    });
     document.body.style.overflow = 'hidden';
+    if (!fromHistory) overlayHistory.open('menu', () => this.closeMobileMenu(true));
   }
 
-  private closeMobileMenu(): void {
+  private closeMobileMenu(fromHistory = false): void {
     const overlay = document.getElementById('mobileMenuOverlay');
     const menu = document.getElementById('mobileMenu');
     if (!overlay || !menu) return;
+    if (this.mobileMenuOpenFrame !== null) cancelAnimationFrame(this.mobileMenuOpenFrame);
+    this.mobileMenuOpenFrame = null;
     menu.classList.remove('open');
     overlay.classList.remove('open');
     const sheetOpen = document.getElementById('regionBottomSheet')?.classList.contains('open');
     if (!sheetOpen) document.body.style.overflow = '';
+    if (!fromHistory) overlayHistory.close('menu');
   }
 
-  private openRegionSheet(): void {
+  private openRegionSheet(replaceMenu = false): void {
     const backdrop = document.getElementById('regionSheetBackdrop');
     const sheet = document.getElementById('regionBottomSheet');
     if (!backdrop || !sheet) return;
     backdrop.classList.add('open');
-    requestAnimationFrame(() => sheet.classList.add('open'));
+    if (this.regionSheetOpenFrame !== null) cancelAnimationFrame(this.regionSheetOpenFrame);
+    this.regionSheetOpenFrame = requestAnimationFrame(() => {
+      this.regionSheetOpenFrame = null;
+      sheet.classList.add('open');
+    });
     document.body.style.overflow = 'hidden';
+    const closeFromHistory = () => this.closeRegionSheet(true);
+    if (replaceMenu) overlayHistory.replace('menu', 'region', closeFromHistory);
+    else overlayHistory.open('region', closeFromHistory);
   }
 
-  private closeRegionSheet(): void {
+  private closeRegionSheet(fromHistory = false): void {
     const backdrop = document.getElementById('regionSheetBackdrop');
     const sheet = document.getElementById('regionBottomSheet');
     if (!backdrop || !sheet) return;
+    if (this.regionSheetOpenFrame !== null) cancelAnimationFrame(this.regionSheetOpenFrame);
+    this.regionSheetOpenFrame = null;
     sheet.classList.remove('open');
     backdrop.classList.remove('open');
     document.body.style.overflow = '';
+    if (!fromHistory) overlayHistory.close('region');
   }
 
   private setupIdleDetection(): void {
@@ -1742,7 +1870,7 @@ export class EventHandlerManager implements AppModule {
         });
     };
     applyProGate(currentIsPro, true);
-    this.proGateUnsubscribers.push(subscribeAuthState(state => applyProGate(state.user?.role === 'pro')));
+    this.authStateUnsubscribers.push(subscribeAuthState(state => applyProGate(state.user?.role === 'pro')));
   }
 
   setupUnifiedSettings(): void {
@@ -1861,6 +1989,23 @@ export class EventHandlerManager implements AppModule {
     if (mount) {
       mount.appendChild(widget.getElement());
     }
+
+    const mobileMount = document.getElementById('mobileAuthWidgetMount');
+    const mobileFallback = document.getElementById('mobileAuthFallback') as HTMLButtonElement | null;
+    this.boundMobileAuthHandler = () => {
+      this.closeMobileMenu();
+      modal.open();
+    };
+    this.mobileAuthFallback = mobileFallback;
+    mobileFallback?.addEventListener('click', this.boundMobileAuthHandler);
+    if (mobileMount) {
+      this.mobileAuthWidget = new AuthHeaderWidget(this.boundMobileAuthHandler);
+      mobileMount.appendChild(this.mobileAuthWidget.getElement());
+      this.authStateUnsubscribers.push(subscribeAuthState((state) => {
+        mobileMount.hidden = state.isPending;
+        if (mobileFallback) mobileFallback.hidden = !state.isPending;
+      }));
+    }
   }
 
   setupPlaybackControl(): void {
@@ -1887,7 +2032,7 @@ export class EventHandlerManager implements AppModule {
       if (initial && !isPro) trackGateHit('playback');
     };
     applyProGate(getAuthState().user?.role === 'pro', true);
-    this.proGateUnsubscribers.push(subscribeAuthState(state => applyProGate(state.user?.role === 'pro')));
+    this.authStateUnsubscribers.push(subscribeAuthState(state => applyProGate(state.user?.role === 'pro')));
   }
 
   setupSnapshotSaving(): void {
