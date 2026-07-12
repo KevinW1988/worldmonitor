@@ -61,7 +61,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { walkContainerGraph } from './_lib/import-graph-walk.mjs';
+import { parseDockerfileCopy, walkContainerGraph } from './_lib/import-graph-walk.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -77,10 +77,11 @@ const root = resolve(__dirname, '..');
 // updates the guard automatically — and a drift makes the guard fail loudly
 // instead of silently passing on a contract the image no longer meets.
 function parseDockerfileContractSrc(src, label) {
-  const copyRoots = [];
-  for (const m of src.matchAll(/^COPY\s+([A-Za-z0-9._-]+)\/\s+\.\//gm)) {
-    copyRoots.push(m[1]);
-  }
+  // Directory-level COPY sources define the containment roots; file-level
+  // COPYs (tsconfigs) are not importable modules and are ignored here. The
+  // COPY grammar itself is parsed by the shared tests/_lib parser so all
+  // three container guards read Dockerfiles identically.
+  const copyRoots = [...parseDockerfileCopy(src).directories];
 
   const installedPackages = new Set();
   const installLines = [...src.matchAll(/^RUN\s+npm\s+install\b[^\n]*/gm)];
@@ -150,7 +151,9 @@ const CONTAINERS = [
     mustIncludeMember: 'seed-portwatch-port-activity.mjs',
     dynamicRoots: [],
     expectsTsx: false,
-    minVisited: 8,
+    // Margin of 0 over the actual count: this small graph has only 2 deep-node
+    // canaries, so a single silently-dropped node must already trip the floor.
+    minVisited: 9,
     deepNodes: ['scripts/_bundle-runner.mjs', 'scripts/_proxy-utils.cjs'],
   },
 ];
@@ -325,6 +328,8 @@ describe('import-graph guard self-test (synthetic fixtures)', () => {
       'scripts/entry.mjs',
       [
         "import './helper.mjs';",
+        "import './regex-hazards.mjs';",
+        "import './nested-cr.mjs';",
         "import 'node:fs';",
         "import 'ok-npm-pkg';",
         "// import './commented-out.mjs'",
@@ -352,6 +357,38 @@ describe('import-graph guard self-test (synthetic fixtures)', () => {
     write('scripts/util.cjs', "const p = require('node:path');\nconst bad = require('bad-npm-cjs');\nconst ok = require('@scope/ok-pkg/sub');\nmodule.exports = { p, bad, ok };\n");
     write('srv/scorer.ts', "import gone from './gone';\nexport default gone;\n");
     write('api/outside.js', 'export const esc = true;\n');
+    // Tokenizer hazards: a regex literal containing /* (or //) must not flip
+    // the stripper into comment state and swallow the edges after it — a
+    // swallowed BARE edge raises no violation and no canary, so only this
+    // fixture proves the case. Division and URL strings pin the flip side
+    // (a `/` in value position must NOT start a regex literal).
+    write(
+      'scripts/regex-hazards.mjs',
+      [
+        "import './entry-was-not-swallowed.mjs';",
+        'const classSlashStar = /[/*]/;',
+        'const escapedSlashes = /a\\/\\*b/;',
+        'const division = 4 / 2 + 8 / 4;',
+        "const url = 'https://example.com/x?a=1'; // trailing comment",
+        "import 'bare-after-regex-pkg';",
+        "import './after-regex.mjs';",
+        '',
+      ].join('\n'),
+    );
+    write('scripts/entry-was-not-swallowed.mjs', 'export const alive = 1;\n');
+    write('scripts/after-regex.mjs', 'export const reached = 1;\n');
+    // The common nested-parens createRequire idiom — the extraction regex must
+    // cross the inner call's parens to find the specifier.
+    write(
+      'scripts/nested-cr.mjs',
+      [
+        "import { createRequire } from 'node:module';",
+        "import { fileURLToPath } from 'node:url';",
+        "const load = createRequire(fileURLToPath(import.meta.url))('./nested-target.cjs');",
+        '',
+      ].join('\n'),
+    );
+    write('scripts/nested-target.cjs', "const bad = require('bad-nested-cjs-pkg');\nmodule.exports = { bad };\n");
 
     result = walkContainerGraph([join(fixRoot, 'scripts/entry.mjs')], {
       repoRoot: fixRoot,
@@ -425,6 +462,35 @@ describe('import-graph guard self-test (synthetic fixtures)', () => {
     assert.ok(
       ![...result.visited].some((f) => f.includes('commented-out')),
       'commented-out import must not be walked',
+    );
+  });
+
+  it('regex literals containing /* do not swallow the edges after them', () => {
+    // The dangerous variant: /[/*]/ used to flip the tokenizer into
+    // block-comment state and eat to EOF — dropping BOTH a bare edge (no
+    // violation, no canary) and a relative edge. Prove both survive.
+    assert.ok(
+      result.violations.some((v) => v.includes("'bare-after-regex-pkg' statically imported")),
+      `bare import after a /[/*]/ regex literal was swallowed:\n${result.violations.join('\n')}`,
+    );
+    assert.ok(
+      result.visited.has(join(fixRoot, 'scripts/after-regex.mjs')),
+      'relative import after a /[/*]/ regex literal was swallowed',
+    );
+    assert.ok(
+      result.visited.has(join(fixRoot, 'scripts/entry-was-not-swallowed.mjs')),
+      'edge BEFORE the regex hazards must be unaffected',
+    );
+  });
+
+  it('follows the nested-parens createRequire(fileURLToPath(...))(...) idiom', () => {
+    assert.ok(
+      result.visited.has(join(fixRoot, 'scripts/nested-target.cjs')),
+      'createRequire with a nested call argument was not followed',
+    );
+    assert.ok(
+      result.violations.some((v) => v.includes("'bad-nested-cjs-pkg' require()d")),
+      `bare require inside the nested-createRequire target was not enforced:\n${result.violations.join('\n')}`,
     );
   });
 });

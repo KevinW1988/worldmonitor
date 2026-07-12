@@ -1,4 +1,7 @@
-import { UNKNOWN_CLIENT_IP } from './rate-limit';
+// client-ip (NOT rate-limit): the constant's home is dependency-free; going
+// through rate-limit's re-export would needlessly weight this module's import
+// graph with @upstash packages (#5231's exact failure shape).
+import { UNKNOWN_CLIENT_IP } from './client-ip';
 
 const TURNSTILE_VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 

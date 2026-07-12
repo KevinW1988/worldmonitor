@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 // Shared scanner/resolver (comment-stripping tokenizer + edge extraction) —
 // one home for the machinery this guard previously copied from the relay
 // test; see tests/_lib/import-graph-walk.mjs (#5231 review follow-up).
-import { collectRelativeImports, resolveImport } from './_lib/import-graph-walk.mjs';
+import { collectRelativeImports, parseDockerfileCopy, resolveNodeRelative } from './_lib/import-graph-walk.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -53,27 +53,13 @@ const TRACKED_PREFIXES = ['scripts/', 'shared/', 'server/_shared/', 'api/'];
  * @returns {{ files: Set<string>, directories: Set<string> }}
  */
 function readCoverage(dockerfilePath) {
-  const src = readFileSync(dockerfilePath, 'utf-8');
-  const files = new Set();
-  const directories = new Set();
-
-  // Split each COPY line, take all source args (everything but the
-  // trailing destination), and bucket into file/directory coverage.
-  const lineRe = /^COPY\s+(.+?)\s+\.\/[^\n]*$/gm;
-  for (const m of src.matchAll(lineRe)) {
-    const args = m[1].split(/\s+/);
-    for (const arg of args) {
-      // Skip non-tracked prefixes (e.g. package.json, node_modules
-      // would never appear here but defensive).
-      if (!TRACKED_PREFIXES.some((p) => arg.startsWith(p))) continue;
-      if (arg.endsWith('/')) {
-        directories.add(arg.replace(/\/$/, ''));
-      } else {
-        files.add(arg);
-      }
-    }
-  }
-  return { files, directories };
+  // The COPY grammar itself is parsed by the shared tests/_lib parser so all
+  // three container guards read Dockerfiles identically; this guard then
+  // scopes coverage to its tracked prefixes (e.g. package.json COPYs are
+  // runtime-resolved, not import-graph coverage).
+  const parsed = parseDockerfileCopy(readFileSync(dockerfilePath, 'utf-8'));
+  const tracked = (set) => new Set([...set].filter((p) => TRACKED_PREFIXES.some((prefix) => p.startsWith(prefix))));
+  return { files: tracked(parsed.files), directories: tracked(parsed.directories) };
 }
 
 /**
@@ -162,7 +148,7 @@ describe('Dockerfile.digest-notifications — transitive-import closure', () => 
       visited.add(file);
       if (!existsSync(file)) continue;
       for (const rel of collectRelativeImports(file)) {
-        const resolved = resolveImport(file, rel, DIGEST_RESOLVE_EXTS);
+        const resolved = resolveNodeRelative(file, rel, DIGEST_RESOLVE_EXTS);
         if (!resolved) continue;
         const relToRoot = resolved.startsWith(root + '/')
           ? resolved.slice(root.length + 1)

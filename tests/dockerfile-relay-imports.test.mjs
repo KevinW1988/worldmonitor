@@ -17,18 +17,17 @@ import { fileURLToPath } from 'node:url';
 // Shared scanner/resolver (comment-stripping tokenizer + edge extraction) —
 // one home for the machinery this guard previously hand-rolled; see
 // tests/_lib/import-graph-walk.mjs (#5231 review follow-up).
-import { collectRelativeImports, resolveImport } from './_lib/import-graph-walk.mjs';
+import { collectRelativeImports, parseDockerfileCopy, resolveNodeRelative } from './_lib/import-graph-walk.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
+// This guard tracks file-level `COPY scripts/foo.mjs ...` lines only; the
+// COPY grammar itself is parsed by the shared tests/_lib parser so all three
+// container guards read Dockerfiles identically.
 function readCopyList(dockerfilePath) {
-  const src = readFileSync(dockerfilePath, 'utf-8');
-  const copied = new Set();
-  // Matches: COPY scripts/foo.mjs ./scripts/foo.mjs
-  const re = /^COPY\s+(scripts\/[^\s]+\.(mjs|cjs))\s+/gm;
-  for (const m of src.matchAll(re)) copied.add(m[1]);
-  return copied;
+  const { files } = parseDockerfileCopy(readFileSync(dockerfilePath, 'utf-8'));
+  return new Set([...files].filter((f) => /^scripts\/.+\.(mjs|cjs)$/.test(f)));
 }
 
 describe('Dockerfile.relay — transitive-import closure', () => {
@@ -69,7 +68,7 @@ describe('Dockerfile.relay — transitive-import closure', () => {
       visited.add(file);
       if (!existsSync(file)) continue;
       for (const rel of collectRelativeImports(file)) {
-        const resolved = resolveImport(file, rel);
+        const resolved = resolveNodeRelative(file, rel);
         if (!resolved) continue;
         const relToRoot = resolved.startsWith(root + '/') ? resolved.slice(root.length + 1) : null;
         if (!relToRoot || !relToRoot.startsWith('scripts/')) continue;
