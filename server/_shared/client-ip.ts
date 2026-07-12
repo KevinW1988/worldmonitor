@@ -1,8 +1,8 @@
 // Trusted client-IP derivation, extracted from rate-limit.ts (#5231).
 //
 // This module MUST stay free of npm imports (node: builtins and repo-relative
-// imports only). It sits in the static import closure of server/_shared/usage.ts
-// -> redis.ts, which Railway seeders load through the tsx loader in containers
+// imports only). It sits in the static import closure of server/_shared/redis.ts
+// -> usage.ts, which Railway seeders load through the tsx loader in containers
 // that install no npm packages beyond tsx itself. A bare npm specifier
 // reachable from here crashes those crons with ERR_MODULE_NOT_FOUND at module
 // resolution time — that is how #5229 took down seed-bundle-resilience-

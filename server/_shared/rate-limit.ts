@@ -9,8 +9,9 @@ import { durationToSeconds, limitWithFallback, resetRateLimitFallbackForTest } f
 // Client-IP derivation lives in the dependency-free client-ip.ts (#5231) so
 // seeder-reachable modules (usage.ts) can use it without pulling this file's
 // @upstash imports into Railway containers. Re-exported here because this was
-// the helpers' original home and callers (gateway, leads, turnstile, tests)
-// import them alongside the limiters.
+// the helpers' original home and existing callers import them from this
+// module (getClientIp: api/ask.ts, api/a2a.ts, api/mcp-proxy.ts;
+// UNKNOWN_CLIENT_IP: turnstile.ts; plus the rate-limit test suites).
 export { getClientIp, hasCloudflareTransitProof, UNKNOWN_CLIENT_IP } from './client-ip';
 
 // @upstash/redis defaults to 5 retries with exponential backoff (~4.3s total)

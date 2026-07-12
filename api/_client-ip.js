@@ -9,7 +9,7 @@ export const RATE_LIMIT_DEGRADED_HEADERS = Object.freeze({
 });
 
 // Header a Cloudflare Transform Rule injects on every proxied request to prove
-// the request actually transited CF. Keep in sync with server/_shared/rate-limit.ts.
+// the request actually transited CF. Keep in sync with server/_shared/client-ip.ts.
 const CF_EDGE_PROOF_HEADER = 'x-wm-edge-proof';
 
 // Constant-time comparison for the edge-proof secret. Synchronous so getClientIp

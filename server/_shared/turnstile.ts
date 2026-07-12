@@ -8,7 +8,10 @@ export function getClientIp(request: Request): string {
   // some non-CF deploys set it directly. x-forwarded-for is client-settable
   // and MUST NOT be used as a rate-limit / abuse-defence identifier (#3531).
   // Trim each value so a whitespace-only header doesn't short-circuit past
-  // the next fallback. Mirrors getClientIp in server/_shared/rate-limit.ts.
+  // the next fallback. Named after getClientIp in server/_shared/client-ip.ts
+  // but deliberately WITHOUT its CF transit-proof gate — this value feeds the
+  // Turnstile siteverify remoteip hint. Hardening the rate-limit call sites
+  // that also consume it is tracked in #5235.
   const cf = (request.headers.get('cf-connecting-ip') ?? '').trim();
   const xr = (request.headers.get('x-real-ip') ?? '').trim();
   return cf || xr || UNKNOWN_CLIENT_IP;
