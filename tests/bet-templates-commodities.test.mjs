@@ -66,6 +66,19 @@ describe('commodity bet templates (fast-resolving lane)', () => {
     const missing = generateBets(COMMODITY_BET_TEMPLATES, { [COMMODITY_FEED]: { quotes: [] } }, NOW);
     assert.equal(missing.length, 0);
   });
+
+  it('skips a bet when the daily direction is undetermined (absent or flat change)', () => {
+    // absent `change` (non-trading session) — direction unknown → no bet
+    const absent = generateBets(COMMODITY_BET_TEMPLATES, {
+      [COMMODITY_FEED]: { quotes: [{ symbol: 'CL=F', price: 71.41 }] },
+    }, NOW);
+    assert.equal(absent.length, 0);
+    // exactly-flat change → no directional signal → no bet (no bullish default)
+    const flat = generateBets(COMMODITY_BET_TEMPLATES, {
+      [COMMODITY_FEED]: { quotes: [{ symbol: 'CL=F', price: 71.41, change: 0 }] },
+    }, NOW);
+    assert.equal(flat.length, 0);
+  });
 });
 
 describe('shapeResolutionFeed exposes the nested commodities quotes array', () => {

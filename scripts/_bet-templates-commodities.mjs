@@ -44,8 +44,11 @@ function buildCommodityTemplate({ symbol, subject, unit }) {
       // Prices are strictly positive; a 0/negative quote is a broken feed. Skip
       // it (a zero baseline would mint a guaranteed-YES bet).
       if (!q || !Number.isFinite(price) || price <= 0) return null;
-      const changePct = Number(q.change); // daily % change (may be absent)
-      return { subject, symbol, value: price, changePct: Number.isFinite(changePct) ? changePct : 0, unit };
+      // daily % change — null when absent (Yahoo omits `change` on non-trading
+      // sessions). Kept as a sentinel so the spec builder can skip a bet whose
+      // direction is undetermined rather than silently defaulting it to "up".
+      const changePct = Number(q.change);
+      return { subject, symbol, value: price, changePct: Number.isFinite(changePct) ? changePct : null, unit };
     },
 
     horizonPolicy({ nowMs }) {
@@ -56,7 +59,11 @@ function buildCommodityTemplate({ symbol, subject, unit }) {
       const { value, changePct } = metric;
       const magnitude = Math.abs(value) * MOVE_FRACTION;
       if (!(magnitude > 0)) return null;
-      const wantUp = changePct >= 0; // continuation of the latest daily move
+      // Direction = continuation of the latest daily move. Undetermined
+      // (absent or exactly-flat change) → emit no bet, so a missing-data day
+      // never skews the shadow pool bullish.
+      if (changePct == null || changePct === 0) return null;
+      const wantUp = changePct > 0;
       const threshold = round(wantUp ? value + magnitude : value - magnitude);
       return {
         kind: 'hard',
