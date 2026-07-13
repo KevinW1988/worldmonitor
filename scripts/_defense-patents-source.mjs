@@ -112,8 +112,26 @@ export function mapPatentApplication(record, category) {
 
 function requireApiKey(apiKey) {
   const value = String(apiKey ?? '').trim();
-  if (!value) throw new Error('USPTO_API_KEY is required');
+  if (!value) {
+    const err = new Error('USPTO_API_KEY is required');
+    // Permanent config failure — do not burn withRetry backoff in runSeed.
+    err.nonRetryable = true;
+    throw err;
+  }
   return value;
+}
+
+function odpHttpError(status) {
+  const err = new Error(`USPTO ODP HTTP ${status}`);
+  err.status = status;
+  // Auth/permission failures must not soft-fail per category into an empty
+  // RETRY exit 0 — that leaves the weekly bundle green while data dies.
+  err.nonRetryable = status === 401 || status === 403;
+  return err;
+}
+
+function isHardCategoryFailure(error) {
+  return Boolean(error?.nonRetryable) || error?.status === 401 || error?.status === 403;
 }
 
 export async function fetchCategoryPatents(category, {
@@ -137,7 +155,7 @@ export async function fetchCategoryPatents(category, {
 
   // ODP uses 404 for a valid query with zero matching records.
   if (response.status === 404) return [];
-  if (!response.ok) throw new Error(`USPTO ODP HTTP ${response.status}`);
+  if (!response.ok) throw odpHttpError(response.status);
 
   const data = await response.json();
   const records = Array.isArray(data?.patentFileWrapperDataBag)
@@ -158,6 +176,8 @@ export async function fetchAllPatents({
 } = {}) {
   const key = requireApiKey(apiKey);
   const all = [];
+  let categoryFailures = 0;
+  let lastCategoryError = null;
 
   for (let index = 0; index < categories.length; index++) {
     const category = categories[index];
@@ -169,8 +189,26 @@ export async function fetchAllPatents({
       logger.log(`    ${patents.length} patents`);
       all.push(...patents);
     } catch (error) {
+      // Permanent auth/config errors: abort immediately so runSeed takes
+      // FETCH FAILED (exit 75) instead of soft-empty RETRY (exit 0).
+      if (isHardCategoryFailure(error)) {
+        logger.warn(`    ${category.code}: hard-failed (${error.message})`);
+        throw error;
+      }
+      categoryFailures += 1;
+      lastCategoryError = error;
       logger.warn(`    ${category.code}: failed (${error.message})`);
     }
+  }
+
+  // Every category threw a soft error and nothing was collected — fail closed
+  // with a thrown error so the seeder exits via FETCH FAILED, not empty RETRY.
+  if (all.length === 0 && categoryFailures === categories.length && lastCategoryError) {
+    const err = new Error(
+      `USPTO ODP: all ${categories.length} CPC categories failed (${lastCategoryError.message})`,
+    );
+    err.cause = lastCategoryError;
+    throw err;
   }
 
   const byIdentity = new Map();

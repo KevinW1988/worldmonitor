@@ -108,9 +108,46 @@ describe('USPTO ODP defense-patent source', () => {
           return new Response('{}');
         },
       }),
-      /USPTO_API_KEY is required/,
+      (err) => {
+        assert.match(err.message, /USPTO_API_KEY is required/);
+        assert.equal(err.nonRetryable, true);
+        return true;
+      },
     );
     assert.equal(called, false);
+  });
+
+  it('treats ODP 404 as an empty category result', async () => {
+    const patents = await fetchCategoryPatents(H04B, {
+      apiKey: 'test-key',
+      fetchFn: async () => new Response('not found', { status: 404 }),
+    });
+    assert.deepEqual(patents, []);
+  });
+
+  it('throws non-retryable on ODP auth failures', async () => {
+    await assert.rejects(
+      fetchCategoryPatents(H04B, {
+        apiKey: 'bad-key',
+        fetchFn: async () => new Response('unauthorized', { status: 401 }),
+      }),
+      (err) => {
+        assert.match(err.message, /USPTO ODP HTTP 401/);
+        assert.equal(err.status, 401);
+        assert.equal(err.nonRetryable, true);
+        return true;
+      },
+    );
+  });
+
+  it('throws on other non-OK ODP responses', async () => {
+    await assert.rejects(
+      fetchCategoryPatents(H04B, {
+        apiKey: 'test-key',
+        fetchFn: async () => new Response('boom', { status: 500 }),
+      }),
+      /USPTO ODP HTTP 500/,
+    );
   });
 
   it('keeps successful categories, deduplicates IDs, and sorts newest first', async () => {
@@ -169,18 +206,43 @@ describe('USPTO ODP defense-patent source', () => {
     ]);
   });
 
-  it('returns an invalid empty payload when every category fails', async () => {
-    const result = await fetchAllPatents({
-      apiKey: 'test-key',
-      categories: [H04B, { code: 'H01L', desc: 'Semiconductor devices' }],
-      delayMs: 0,
-      fetchCategory: async () => { throw new Error('upstream unavailable'); },
-      logger: { log() {}, warn() {} },
-    });
+  it('hard-fails when every category throws so runSeed takes FETCH FAILED', async () => {
+    await assert.rejects(
+      fetchAllPatents({
+        apiKey: 'test-key',
+        categories: [H04B, { code: 'H01L', desc: 'Semiconductor devices' }],
+        delayMs: 0,
+        fetchCategory: async () => { throw new Error('upstream unavailable'); },
+        logger: { log() {}, warn() {} },
+      }),
+      /all 2 CPC categories failed/,
+    );
+  });
 
-    assert.deepEqual(result.patents, []);
-    assert.equal(result.total, 0);
-    assert.equal(validateDefensePatents(result), false);
+  it('aborts remaining categories on auth failure instead of soft-empty RETRY', async () => {
+    let calls = 0;
+    await assert.rejects(
+      fetchAllPatents({
+        apiKey: 'bad-key',
+        categories: [H04B, { code: 'H01L', desc: 'Semiconductor devices' }],
+        delayMs: 0,
+        fetchCategory: async () => {
+          calls += 1;
+          const err = new Error('USPTO ODP HTTP 403');
+          err.status = 403;
+          err.nonRetryable = true;
+          throw err;
+        },
+        logger: { log() {}, warn() {} },
+      }),
+      /USPTO ODP HTTP 403/,
+    );
+    assert.equal(calls, 1);
+  });
+
+  it('keeps empty-but-successful category results invalid for the seed contract', () => {
+    assert.equal(validateDefensePatents({ patents: [], total: 0 }), false);
+    assert.equal(validateDefensePatents({ patents: [{ patentId: 'US1' }] }), true);
   });
 });
 
