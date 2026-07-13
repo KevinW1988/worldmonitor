@@ -34,7 +34,8 @@ const {
   recordDedupOutcome,
 } = require('./shared/notification-dedup.cjs');
 const { maintainClosedMarketEquityKeys: maintainClosedMarketEquityKeysWithDeps } = require('./shared/closed-market-equity-maintenance.cjs');
-const { getUsEquitySession, isUsEquityTradingDay } = require('./shared/market-hours.cjs');
+const { getUsEquitySession, isMultiMarketEquityTradingDay } = require('./shared/market-hours.cjs');
+const { mergeLastGoodQuotes, planYahooRefresh } = require('./shared/market-quote-refresh.cjs');
 const parseProxyUrl = parseProxyConfig;
 
 const httpsKeepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 6, timeout: 60_000 });
@@ -1895,14 +1896,17 @@ async function startSatelliteSeedLoop() {
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
 const MARKET_SEED_INTERVAL_MS = 300_000; // 5 min
 const MARKET_SEED_TTL = 7200; // 2h — survive extended Yahoo/upstream outages
+const _configuredYahooRefreshIntervalMs = Number(process.env.MARKET_YAHOO_REFRESH_INTERVAL_MS);
+const MARKET_YAHOO_REFRESH_INTERVAL_MS = Math.max(
+  MARKET_SEED_INTERVAL_MS,
+  Number.isFinite(_configuredYahooRefreshIntervalMs) && _configuredYahooRefreshIntervalMs > 0
+    ? _configuredYahooRefreshIntervalMs
+    : 900_000,
+);
 
-// Must match src/config/markets.ts MARKET_SYMBOLS — update both when changing
-const MARKET_SYMBOLS = [
-  'AAPL', 'AMZN', 'AVGO', 'BAC', 'BRK-B', 'COST', 'GOOGL', 'HD',
-  'JNJ', 'JPM', 'LLY', 'MA', 'META', 'MSFT', 'NFLX', 'NVO', 'NVDA',
-  'ORCL', 'PG', 'TSLA', 'TSM', 'UNH', 'V', 'WMT', 'XOM',
-  '^DJI', '^GSPC', '^IXIC', '^RUT',
-];
+const _stockCfg = requireShared('stocks.json');
+const MARKET_SYMBOLS = _stockCfg.symbols.map((s) => s.symbol);
+const MARKET_META = new Map(_stockCfg.symbols.map((s) => [s.symbol, { name: s.name, display: s.display }]));
 
 const _commodityCfg = requireShared('commodities.json');
 const COMMODITY_SYMBOLS = _commodityCfg.commodities.map(c => c.symbol);
@@ -1910,11 +1914,10 @@ const COMMODITY_META = new Map(_commodityCfg.commodities.map(c => [c.symbol, { n
 
 const SECTOR_SYMBOLS = ['XLK', 'XLF', 'XLE', 'XLV', 'XLY', 'XLI', 'XLP', 'XLU', 'XLB', 'XLRE', 'XLC', 'SMH'];
 
-// Symbols that must come from Yahoo — Finnhub doesn't carry futures (=F) or major indices.
-// ^GSPC/^DJI/^IXIC live in MARKET_SYMBOLS (not COMMODITY_SYMBOLS) so they must be listed
-// explicitly; commodity ETFs (URA, LIT) also go through Yahoo since they have no Finnhub feed.
+// Symbols that must come from Yahoo — Finnhub doesn't carry futures (=F),
+// major indices, or the exchange-qualified Asian symbols in stocks.json.
 const YAHOO_ONLY = new Set([
-  '^GSPC', '^DJI', '^IXIC', '^RUT',
+  ..._stockCfg.yahooOnly,
   ...COMMODITY_SYMBOLS.filter(s => s.endsWith('=F') || s.startsWith('^')),
   'URA', 'LIT',
   // Spot gold and forex pairs (=X suffix) — not on Finnhub
@@ -2142,12 +2145,12 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // #4922d closed-market equity gate. Last quote count published by
 // seedMarketQuotes — reused to refresh seed-meta freshness while skipping.
 let _lastEquityQuoteCount = 0;
+let _lastYahooMarketRefreshAt = 0;
 // Log once per open↔closed transition, not every 5-minute cycle.
 let _equityGateLoggedClosed = false;
 
-// While the US market is fully closed (weekend / NYSE holiday — NOT weekday
-// overnight: the MARKET_SYMBOLS list mixes NSE tickers whose IST session sits
-// inside the US overnight window), skip the equity fetch+publish and instead
+// When every tracked equity market is on a non-trading day, skip the equity
+// fetch+publish and instead
 // keep the last-good keys alive: extend TTL on both published keys and
 // refresh seed-meta:market:stocks fetchedAt so /api/health (maxStaleMin 30)
 // stays green across a 60h+ weekend. Returns true when last-good was
@@ -2166,7 +2169,8 @@ async function maintainClosedMarketEquityKeys() {
 }
 
 async function seedMarketQuotes() {
-  const quotes = [];
+  const previousPayloadPromise = envelopeRead('market:stocks-bootstrap:v1');
+  const freshQuotes = [];
   const finnhubSymbols = MARKET_SYMBOLS.filter((s) => !YAHOO_ONLY.has(s));
   const yahooSymbols = MARKET_SYMBOLS.filter((s) => YAHOO_ONLY.has(s));
 
@@ -2174,27 +2178,44 @@ async function seedMarketQuotes() {
     const results = await Promise.all(finnhubSymbols.map((s) => fetchFinnhubQuoteDirect(s, FINNHUB_API_KEY)));
     for (let i = 0; i < finnhubSymbols.length; i++) {
       const r = results[i];
-      if (r) quotes.push({ symbol: finnhubSymbols[i], name: finnhubSymbols[i], display: finnhubSymbols[i], price: r.price, change: r.changePercent, sparkline: [] });
+      const symbol = finnhubSymbols[i];
+      const meta = MARKET_META.get(symbol);
+      if (r) freshQuotes.push({ symbol, name: meta?.name || symbol, display: meta?.display || symbol, price: r.price, change: r.changePercent, sparkline: [] });
     }
   }
 
   const missedFinnhub = FINNHUB_API_KEY
-    ? finnhubSymbols.filter((s) => !quotes.some((q) => q.symbol === s))
+    ? finnhubSymbols.filter((s) => !freshQuotes.some((q) => q.symbol === s))
     : finnhubSymbols;
-  const allYahoo = [...yahooSymbols, ...missedFinnhub];
+  const yahooPlan = planYahooRefresh({
+    mandatoryYahooSymbols: yahooSymbols,
+    missedPrimarySymbols: missedFinnhub,
+    nowMs: Date.now(),
+    lastRefreshAt: _lastYahooMarketRefreshAt,
+    refreshIntervalMs: MARKET_YAHOO_REFRESH_INTERVAL_MS,
+  });
+  const allYahoo = yahooPlan.symbols;
+  if (yahooPlan.due) _lastYahooMarketRefreshAt = Date.now();
+  const freshCountBeforeYahoo = freshQuotes.length;
 
   for (const s of allYahoo) {
-    if (quotes.some((q) => q.symbol === s)) continue;
+    if (freshQuotes.some((q) => q.symbol === s)) continue;
     const yahoo = await fetchYahooChartDirect(s);
-    if (yahoo) quotes.push({ symbol: s, name: s, display: s, price: yahoo.price, change: yahoo.change, sparkline: yahoo.sparkline });
+    const meta = MARKET_META.get(s);
+    if (yahoo) freshQuotes.push({ symbol: s, name: meta?.name || s, display: meta?.display || s, price: yahoo.price, change: yahoo.change, sparkline: yahoo.sparkline });
     await sleep(150);
   }
 
-  if (quotes.length === 0) {
+  if (freshQuotes.length === 0) {
     console.warn('[Market] No quotes fetched — skipping Redis write');
     return 0;
   }
 
+  const previousPayload = await previousPayloadPromise;
+  const previousQuotes = Array.isArray(previousPayload?.quotes) ? previousPayload.quotes : [];
+  const quotes = mergeLastGoodQuotes(MARKET_SYMBOLS, freshQuotes, previousQuotes);
+  const retainedCount = quotes.length - freshQuotes.length;
+  const yahooSuccessCount = freshQuotes.length - freshCountBeforeYahoo;
   const coveredByYahoo = finnhubSymbols.every((s) => quotes.some((q) => q.symbol === s));
   const skipped = !FINNHUB_API_KEY && !coveredByYahoo;
   const payload = { quotes, finnhubSkipped: skipped, skipReason: skipped ? 'FINNHUB_API_KEY not configured' : '', rateLimited: false };
@@ -2204,7 +2225,7 @@ async function seedMarketQuotes() {
   const ok2 = await envelopeWrite('market:stocks-bootstrap:v1', payload, MARKET_SEED_TTL, { recordCount: quotes.length, sourceVersion: 'market-stocks' });
   const ok3 = await upstashSet('seed-meta:market:stocks', { fetchedAt: Date.now(), recordCount: quotes.length }, 604800);
   _lastEquityQuoteCount = quotes.length;
-  console.log(`[Market] Seeded ${quotes.length}/${MARKET_SYMBOLS.length} quotes (redis: ${ok && ok2 && ok3 ? 'OK' : 'PARTIAL'})`);
+  console.log(`[Market] Seeded ${quotes.length}/${MARKET_SYMBOLS.length} quotes (${freshQuotes.length} fresh, ${retainedCount} retained; Yahoo ${yahooSuccessCount}/${allYahoo.length}, cadence ${MARKET_YAHOO_REFRESH_INTERVAL_MS / 60000}min; redis: ${ok && ok2 && ok3 ? 'OK' : 'PARTIAL'})`);
   const movingStocks = quotes.filter(q => Math.abs(q.change ?? 0) >= 5).sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
   for (const q of movingStocks.slice(0, 3)) {
     const pct = Math.round(q.change);
@@ -2759,24 +2780,35 @@ async function seedTokenPanels() {
   return total;
 }
 
-async function seedAllMarketData() {
+let _marketSeedRun = null;
+
+function seedAllMarketData() {
+  if (_marketSeedRun) {
+    console.warn('[Market] Prior seed still running — joining it instead of starting an overlapping refresh');
+    return _marketSeedRun;
+  }
+  _marketSeedRun = seedAllMarketDataOnce().finally(() => { _marketSeedRun = null; });
+  return _marketSeedRun;
+}
+
+async function seedAllMarketDataOnce() {
   const t0 = Date.now();
-  // Equity gate (#4922d): weekends/holidays skip the stocks fetch+publish.
+  // Equity gate (#4922d): shared dead days skip the stocks fetch+publish.
   // Crypto (24/7), commodities, gulf, ETF and token panels are untouched.
   let q = 0;
   let equitySkipped = false;
-  if (!isUsEquityTradingDay()) {
+  if (!isMultiMarketEquityTradingDay()) {
     equitySkipped = await maintainClosedMarketEquityKeys();
     if (equitySkipped) {
       if (!_equityGateLoggedClosed) {
-        console.log(`[Market] US market closed (session=${getUsEquitySession()}) — skipping equity fetch, extended TTL on last-good keys`);
+        console.log(`[Market] Tracked equity markets closed (US session=${getUsEquitySession()}) — skipping equity fetch, extended TTL on last-good keys`);
         _equityGateLoggedClosed = true;
       }
     } else {
-      console.warn('[Market] US market closed but last-good equity keys missing — fetching anyway');
+      console.warn('[Market] Tracked equity markets closed but last-good equity keys missing — fetching anyway');
     }
   } else if (_equityGateLoggedClosed) {
-    console.log(`[Market] US market session now ${getUsEquitySession()} — resuming equity fetch`);
+    console.log(`[Market] Tracked equity refresh resumed (US session=${getUsEquitySession()})`);
     _equityGateLoggedClosed = false;
   }
   if (!equitySkipped) q = await seedMarketQuotes();
