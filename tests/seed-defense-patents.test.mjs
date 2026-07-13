@@ -10,6 +10,7 @@ import {
   fetchCategoryPatents,
   mapPatentApplication,
 } from '../scripts/_defense-patents-source.mjs';
+import { validateDefensePatents } from '../scripts/seed-defense-patents.mjs';
 
 const H04B = { code: 'H04B', desc: 'Transmission / Communications' };
 
@@ -131,6 +132,20 @@ describe('USPTO ODP defense-patent source', () => {
     assert.deepEqual(result.patents.map((patent) => patent.patentId), ['US2', 'US1']);
     assert.equal(result.total, 2);
     assert.match(result.fetchedAt, /^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('returns an invalid empty payload when every category fails', async () => {
+    const result = await fetchAllPatents({
+      apiKey: 'test-key',
+      categories: [H04B, { code: 'H01L', desc: 'Semiconductor devices' }],
+      delayMs: 0,
+      fetchCategory: async () => { throw new Error('upstream unavailable'); },
+      logger: { log() {}, warn() {} },
+    });
+
+    assert.deepEqual(result.patents, []);
+    assert.equal(result.total, 0);
+    assert.equal(validateDefensePatents(result), false);
   });
 });
 

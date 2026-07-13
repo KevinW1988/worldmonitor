@@ -11,7 +11,7 @@ loadEnvFile(import.meta.url);
 const CANONICAL_KEY = 'patents:defense:latest';
 const CACHE_TTL = 1_814_400; // 21 days (3× weekly interval)
 
-function validate(data) {
+export function validateDefensePatents(data) {
   return Array.isArray(data?.patents) && data.patents.length > 0;
 }
 
@@ -27,7 +27,7 @@ if (isMain) {
     CANONICAL_KEY,
     () => fetchAllPatents({ apiKey: process.env.USPTO_API_KEY }),
     {
-      validateFn: validate,
+      validateFn: validateDefensePatents,
       ttlSeconds: CACHE_TTL,
       sourceVersion: 'uspto-odp-v1',
       recordCount: (data) => data?.patents?.length ?? 0,
