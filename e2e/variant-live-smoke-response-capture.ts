@@ -46,22 +46,27 @@ export function captureLocalApiResponse<RequestType>(
   response: ApiResponseLike<RequestType>,
   apiRequestMetadata: ApiRequestMetadataLookup<RequestType>,
   apiResponses: ApiDiagnostic[],
-  detachedResponseErrors: string[],
+  responseCaptureErrors: string[],
 ): void {
+  let url: string;
+  let request: RequestType;
+  let status: number;
   try {
-    const url = response.url();
-    if (!isLocalApiUrl(url)) return;
-    const requestMetadata = apiRequestMetadata.get(response.request());
-    apiResponses.push({
-      method: requestMetadata?.method ?? 'unknown',
-      path: apiPath(url),
-      resourceType: requestMetadata?.resourceType ?? 'unknown',
-      status: response.status(),
-      url,
-    });
+    url = response.url();
+    request = response.request();
+    status = response.status();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes('was not bound in the connection')) throw error;
-    detachedResponseErrors.push(message);
+    responseCaptureErrors.push(error instanceof Error ? error.message : String(error));
+    return;
   }
+
+  if (!isLocalApiUrl(url)) return;
+  const requestMetadata = apiRequestMetadata.get(request);
+  apiResponses.push({
+    method: requestMetadata?.method ?? 'unknown',
+    path: apiPath(url),
+    resourceType: requestMetadata?.resourceType ?? 'unknown',
+    status,
+    url,
+  });
 }

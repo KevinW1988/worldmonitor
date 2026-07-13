@@ -87,7 +87,7 @@ test.describe('variant live reliability smoke', () => {
     const expectedPanelIds = EXPECTED_BOOT_PANELS[variant];
     const apiResponses: ApiDiagnostic[] = [];
     const apiRequestMetadata = new WeakMap<Request, { method: string; resourceType: string }>();
-    const detachedResponseErrors: string[] = [];
+    const responseCaptureErrors: string[] = [];
     const failedApiRequests: Array<{ failure: string; method: string; path: string; url: string }> = [];
     const pageErrors: string[] = [];
     const consoleIssues: Array<{ text: string; type: string }> = [];
@@ -102,7 +102,7 @@ test.describe('variant live reliability smoke', () => {
     });
 
     page.on('response', (response) => {
-      captureLocalApiResponse(response, apiRequestMetadata, apiResponses, detachedResponseErrors);
+      captureLocalApiResponse(response, apiRequestMetadata, apiResponses, responseCaptureErrors);
     });
 
     page.on('requestfailed', (request) => {
@@ -257,7 +257,7 @@ test.describe('variant live reliability smoke', () => {
         activeVariant: panelDiagnostics.activeVariant,
         unexpected401,
         api401s: apiResponses.filter((response) => response.status === 401),
-        detachedResponseErrors,
+        responseCaptureErrors: responseCaptureErrors.slice(0, 20),
         failedApiRequests: failedApiRequests.slice(0, 20),
         unexpectedPageErrors,
         consoleIssues: consoleIssues.slice(0, 40),

@@ -4,7 +4,7 @@ import { captureLocalApiResponse, type ApiDiagnostic } from '../e2e/variant-live
 
 test('variant smoke response capture tolerates a detached Playwright response', () => {
   const apiResponses: ApiDiagnostic[] = [];
-  const detachedResponseErrors: string[] = [];
+  const responseCaptureErrors: string[] = [];
   const detachedResponse = {
     request: () => {
       throw new Error('request() must not be read after a detached response');
@@ -18,10 +18,10 @@ test('variant smoke response capture tolerates a detached Playwright response', 
   };
 
   assert.doesNotThrow(() => {
-    captureLocalApiResponse(detachedResponse, new Map(), apiResponses, detachedResponseErrors);
+    captureLocalApiResponse(detachedResponse, new Map(), apiResponses, responseCaptureErrors);
   });
   assert.deepEqual(apiResponses, []);
-  assert.deepEqual(detachedResponseErrors, [
+  assert.deepEqual(responseCaptureErrors, [
     'Object with guid response@deadbeef was not bound in the connection',
   ]);
 });
@@ -29,7 +29,7 @@ test('variant smoke response capture tolerates a detached Playwright response', 
 test('variant smoke response capture retains normal local API status diagnostics', () => {
   const request = {};
   const apiResponses: ApiDiagnostic[] = [];
-  const detachedResponseErrors: string[] = [];
+  const responseCaptureErrors: string[] = [];
 
   captureLocalApiResponse(
     {
@@ -39,7 +39,7 @@ test('variant smoke response capture retains normal local API status diagnostics
     },
     new Map([[request, { method: 'GET', resourceType: 'fetch' }]]),
     apiResponses,
-    detachedResponseErrors,
+    responseCaptureErrors,
   );
 
   assert.deepEqual(apiResponses, [{
@@ -49,5 +49,21 @@ test('variant smoke response capture retains normal local API status diagnostics
     status: 401,
     url: 'http://127.0.0.1:4173/api/bootstrap?compact=1',
   }]);
-  assert.deepEqual(detachedResponseErrors, []);
+  assert.deepEqual(responseCaptureErrors, []);
+});
+
+test('variant smoke response capture propagates metadata lookup failures', () => {
+  const request = {};
+  assert.throws(() => {
+    captureLocalApiResponse(
+      {
+        request: () => request,
+        status: () => 200,
+        url: () => 'http://127.0.0.1:4173/api/bootstrap',
+      },
+      { get: () => { throw new Error('metadata lookup failed'); } },
+      [],
+      [],
+    );
+  }, /metadata lookup failed/);
 });
