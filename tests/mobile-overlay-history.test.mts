@@ -219,7 +219,7 @@ describe('OverlayHistoryManager', () => {
     manager.destroy();
   });
 
-  it('invalidates superseded pending gates and promotes only the current gate', () => {
+  it('invalidates superseded pending gates', () => {
     const { environment } = createEnvironment();
     const manager = new OverlayHistoryManager(environment);
     let firstCancels = 0;
@@ -228,10 +228,8 @@ describe('OverlayHistoryManager', () => {
     const second = manager.beginPending('search-pending', undefined, () => { secondCancels += 1; });
 
     assert.equal(first.isCurrent(), false);
-    assert.equal(first.promote('search', () => {}), false);
     assert.equal(second.isCurrent(), true);
-    assert.equal(second.promote('search', () => {}), true);
-    assert.equal(manager.top(), 'search');
+    assert.equal(manager.top(), 'search-pending');
     assert.equal(firstCancels, 0);
     assert.equal(secondCancels, 0);
     manager.destroy();

@@ -188,7 +188,7 @@ describe('App.openSearch lazy-load state machine (#4403)', () => {
     assert.equal(h.modal.closes, 1, 'toggle on an open modal closes it');
   });
 
-  it('records replacement context and promotes the pending Search marker', async () => {
+  it('records replacement context and passes the pending marker to SearchModal', async () => {
     const h = makeInstance();
     const p = h.inst.openSearch({ historyPending: true, replaceOverlayId: 'menu' });
     assert.deepEqual(historyDouble.calls, [
@@ -209,5 +209,17 @@ describe('App.openSearch lazy-load state machine (#4403)', () => {
     await p;
     assert.equal(h.modal.opens, 0);
     assert.equal(h.inst.searchToggleDesiredOpen, false);
+  });
+
+  it('does not toast when a Back-cancelled Search chunk later fails', async () => {
+    const h = makeInstance({ failLoad: true });
+    const p = h.inst.openSearch({ historyPending: true });
+    await Promise.resolve(); // let openSearch attach its handler to the in-flight chunk
+    historyDouble.back();
+    h.failLoadNow();
+
+    await p;
+    assert.equal(h.modal.opens, 0);
+    assert.deepEqual(toastMessages, []);
   });
 });

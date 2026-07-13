@@ -1153,7 +1153,8 @@ export class App {
       if (!modal) throw new Error('Search modal is not initialised');
       modal.open(pendingGate ? pendingId : options.replaceOverlayId);
     } catch (error) {
-      if (!this.state.isDestroyed) {
+      const actionWasCancelled = pendingGate !== null && !pendingGate.isCurrent();
+      if (!this.state.isDestroyed && !actionWasCancelled) {
         console.warn('[search] Failed to load search manager:', error);
         if (!options.throwOnFailure) showToast('Search failed to load. Please try again.');
       }

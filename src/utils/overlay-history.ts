@@ -33,7 +33,6 @@ export interface OverlayHistoryEnvironment {
 
 export interface PendingOverlayGate {
   isCurrent(): boolean;
-  promote(id: OverlayId, close: OverlayCloseCallback): boolean;
   cancel(): void;
 }
 
@@ -179,11 +178,6 @@ export class OverlayHistoryManager {
     if (!this.deferUntilPop(register)) register();
     return {
       isCurrent: () => this.pendingGeneration === generation && (!registered || this.top() === id),
-      promote: (nextId, close) => {
-        if (this.pendingGeneration !== generation || !registered || this.top() !== id) return false;
-        this.replace(id, nextId, close);
-        return true;
-      },
       cancel: () => {
         if (this.pendingGeneration !== generation) return;
         invalidate();
