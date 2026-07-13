@@ -26,6 +26,9 @@ const HEALTH_VERDICT_SNAPSHOT_KEY = healthVerdictRedisKey(
   process.env.VERCEL_GIT_COMMIT_SHA,
 );
 const HEALTH_VERDICT_SNAPSHOT_TTL_SECONDS = 60;
+// Edge runtime mirror of scripts/china-coverage-manifest.mjs. Edge functions
+// cannot import scripts/; tests enforce key and status-projection parity.
+const CHINA_COVERAGE_SUMMARY_KEY = 'health:china-coverage:v1';
 const HEALTH_VERDICT_SNAPSHOT_TTL_MS = HEALTH_VERDICT_SNAPSHOT_TTL_SECONDS * 1_000;
 const HEALTH_VERDICT_REFRESH_LOCK_KEY = `${HEALTH_VERDICT_SNAPSHOT_KEY}:refresh-lock`;
 // The sweep can consume its full 8s timeout, followed by a 4s failure-log read
@@ -146,6 +149,7 @@ const BOOTSTRAP_KEYS = {
 };
 
 const STANDALONE_KEYS = {
+  chinaCoverage:      CHINA_COVERAGE_SUMMARY_KEY,
   // #4920 completeness measurement (daily GH Actions publishers) — ops
   // keys: health-monitored but NOT bootstrap-hydrated into page loads.
   newsFeedHealth:    'news:feed-health:v1',
@@ -310,6 +314,7 @@ const STANDALONE_KEYS = {
 };
 
 const SEED_META = {
+  chinaCoverage:   { key: 'seed-meta:health:china-coverage',   maxStaleMin: 180 },
   earthquakes:      { key: 'seed-meta:seismology:earthquakes',  maxStaleMin: 30 },
   wildfires:        { key: 'seed-meta:wildfire:fires',          maxStaleMin: 360 }, // FIRMS NRT resets at midnight UTC; new-day data takes 3-6h to accumulate
   wildfiresBootstrap: { key: 'seed-meta:wildfire:fires-bootstrap', maxStaleMin: 360 }, // Compact CDN payload is a distinct publish target; monitor it so canonical fallback cannot hide transform/write failures.
@@ -584,6 +589,11 @@ if (!IRAN_EVENTS_ENABLED) {
 // chronic outage went undetected until a user noticed the panel was stuck on
 // "Loading...". Removed marketImplications below.
 const ON_DEMAND_KEYS = new Set([
+  // Deployment-order bridge: Vercel can ship this reader before Railway's
+  // hourly bundle publishes the first summary. The seeder writes a durable
+  // activation marker after its first successful publish; after that, a
+  // missing/stale summary is strict forever.
+  'chinaCoverage',
   'riskScoresLive',
   'usniFleetStale', 'positiveEventsLive',
   'bisPolicy', 'bisExchange', 'bisCredit',
@@ -664,6 +674,7 @@ const ON_DEMAND_KEYS = new Set([
 // publish; when the marker exists the key leaves ON_DEMAND softening and
 // normal EMPTY/STALE_SEED rules apply.
 const ACTIVATION_MARKERS = {
+  chinaCoverage: 'seed-activated:health:china-coverage',
   newsFeedHealth: 'seed-activated:news:feed-health',
   newsRecallBenchmark: 'seed-activated:news:recall-benchmark',
 };
@@ -914,9 +925,123 @@ const STATUS_COUNTS = {
   // (both bucket to 'warn' — overall status is `degraded`, not `critical`).
   // 2026-05-04 health-readiness plan, Sprint 1.
   STALE_CONTENT: 'warn',
+  CHINA_DEGRADED: 'warn',
+  CHINA_UNAVAILABLE: 'crit',
   EMPTY: 'crit',
   EMPTY_DATA: 'crit',
 };
+
+function isValidChinaCoverageSummary(candidate) {
+  if (
+    !candidate
+    || typeof candidate !== 'object'
+    || candidate.schemaVersion !== 1
+    || candidate.countryCode !== 'CN'
+    || !['healthy', 'degraded', 'unavailable'].includes(candidate.status)
+    || typeof candidate.evaluatedAt !== 'string'
+    || !Number.isFinite(Date.parse(candidate.evaluatedAt))
+    || !Array.isArray(candidate.entries)
+    || candidate.entries.length === 0
+    || candidate.entries.length > 100
+    || !candidate.counts
+    || typeof candidate.counts !== 'object'
+  ) {
+    return false;
+  }
+
+  const ids = new Set();
+  const actual = {
+    total: candidate.entries.length,
+    launched: 0,
+    planned: 0,
+    blocked: 0,
+    healthy: 0,
+    degraded: 0,
+    unavailable: 0,
+  };
+  for (const entry of candidate.entries) {
+    if (
+      !entry
+      || typeof entry !== 'object'
+      || typeof entry.id !== 'string'
+      || entry.id.length === 0
+      || entry.id.length > 100
+      || ids.has(entry.id)
+      || !['launched', 'planned', 'blocked'].includes(entry.launchStatus)
+      || !Array.isArray(entry.reasonCodes)
+      || entry.reasonCodes.length > 16
+      || entry.reasonCodes.some((reason) => typeof reason !== 'string' || reason.length > 64)
+    ) {
+      return false;
+    }
+    ids.add(entry.id);
+    actual[entry.launchStatus]++;
+    if (entry.launchStatus === 'launched') {
+      if (!['healthy', 'degraded', 'unavailable'].includes(entry.status)) return false;
+      actual[entry.status]++;
+    } else if (entry.status !== entry.launchStatus) {
+      return false;
+    }
+  }
+
+  if (actual.launched === 0) return false;
+  for (const [name, value] of Object.entries(actual)) {
+    if (candidate.counts[name] !== value) return false;
+  }
+  const expectedStatus = actual.unavailable === actual.launched
+    ? 'unavailable'
+    : actual.degraded > 0 || actual.unavailable > 0
+      ? 'degraded'
+      : 'healthy';
+  return candidate.status === expectedStatus;
+}
+
+function projectChinaCoverageStatus(raw, readError = false) {
+  if (readError) {
+    return { status: 'REDIS_PARTIAL', chinaStatus: null, reason: 'SUMMARY_READ_FAILED' };
+  }
+  const candidate = typeof raw === 'string'
+    ? unwrapEnvelope(parseRedisValue(raw)).data
+    : unwrapEnvelope(raw).data;
+  if (!isValidChinaCoverageSummary(candidate)) {
+    return { status: 'CHINA_UNAVAILABLE', chinaStatus: 'unavailable', reason: 'SUMMARY_INVALID' };
+  }
+
+  const status = {
+    healthy: 'OK',
+    degraded: 'CHINA_DEGRADED',
+    unavailable: 'CHINA_UNAVAILABLE',
+  }[candidate.status] ?? 'CHINA_UNAVAILABLE';
+  const problems = Array.isArray(candidate.entries)
+    ? candidate.entries
+      .filter((entry) => entry?.launchStatus === 'launched' && entry?.status !== 'healthy')
+      .map((entry) => ({ id: entry.id, status: entry.status, reasonCodes: entry.reasonCodes ?? [] }))
+    : [];
+  return {
+    status,
+    chinaStatus: candidate.status,
+    evaluatedAt: candidate.evaluatedAt ?? null,
+    counts: candidate.counts ?? null,
+    ...(problems.length > 0 ? { problems } : {}),
+  };
+}
+
+function composeChinaCoverageStatus(entry, raw, readError = false) {
+  if (!entry || !['OK', 'STALE_SEED', 'SEED_ERROR'].includes(entry.status)) return entry;
+
+  const seedStatus = entry.status;
+  const projected = projectChinaCoverageStatus(raw, readError);
+  if (seedStatus === 'OK') return { ...entry, ...projected };
+
+  // Preserve writer-health failures when the last summary was healthy, but do
+  // not let a stale/error seed downgrade a known China content outage from
+  // critical to warning. For degraded/unavailable summaries, surface the
+  // content verdict and retain the independent writer signal as seedStatus.
+  if (projected.status === 'OK') {
+    return { ...entry, ...projected, status: seedStatus, seedStatus };
+  }
+  return { ...entry, ...projected, seedStatus };
+}
 
 function parseHealthVerdictSnapshot(raw, now) {
   if (typeof raw !== 'string') return null;
@@ -1158,6 +1283,7 @@ export default async function handler(req, ctx) {
       ...allDataKeys.map(dataLenCommand),
       ...allMetaKeys.map(k => ['GET', k]),
       ...activationEntries.map(([, marker]) => ['EXISTS', marker]),
+      ['GET', CHINA_COVERAGE_SUMMARY_KEY],
     ];
     if (!getRedisCredentials()) throw new Error('Redis not configured');
     results = await redisPipeline(commands, 8_000);
@@ -1203,6 +1329,8 @@ export default async function handler(req, ctx) {
     const r = results[allDataKeys.length + allMetaKeys.length + i];
     if (!r?.error && Number(r?.result) === 1) activatedNames.add(activationEntries[i][0]);
   }
+  const chinaCoverageResult = results[allDataKeys.length + allMetaKeys.length + activationEntries.length];
+  const chinaCoverageRaw = chinaCoverageResult?.error ? null : chinaCoverageResult?.result;
 
   const classifyCtx = { keyStrens, keyErrors, keyMetaValues, keyMetaErrors, activatedNames, now };
   const checks = {};
@@ -1216,7 +1344,10 @@ export default async function handler(req, ctx) {
   for (const [registry, opts] of sources) {
     for (const [name, redisKey] of Object.entries(registry)) {
       totalChecks++;
-      const entry = classifyKey(name, redisKey, opts, classifyCtx);
+      let entry = classifyKey(name, redisKey, opts, classifyCtx);
+      if (name === 'chinaCoverage') {
+        entry = composeChinaCoverageStatus(entry, chinaCoverageRaw, Boolean(chinaCoverageResult?.error));
+      }
       checks[name] = entry;
       const bucket = STATUS_COUNTS[entry.status] ?? 'warn';
       counts[bucket]++;
@@ -1357,6 +1488,9 @@ export const __testing__ = {
   HEALTH_VERDICT_SNAPSHOT_TTL_SECONDS,
   HEALTH_VERDICT_REFRESH_LOCK_KEY,
   HEALTH_VERDICT_REFRESH_WAIT_MS,
+  CHINA_COVERAGE_SUMMARY_KEY,
+  projectChinaCoverageStatus,
+  composeChinaCoverageStatus,
   healthVerdictRedisKey,
   parseHealthVerdictSnapshot,
   // U7 (Tier 3 parity test): exposed for tests/mcp-bootstrap-parity.test.mjs
