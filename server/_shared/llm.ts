@@ -2,6 +2,9 @@ import { CHROME_UA } from './constants';
 import { isProviderAvailable } from './llm-health';
 import { sanitizeForPrompt } from './llm-sanitize.js';
 import { buildLlmCallEvent, deliverUsageEvents, type LlmCallEvent } from './usage';
+import { getLlmAttemptTimeoutMs } from '../../scripts/_llm-model-timeouts.mjs';
+
+export { getLlmAttemptTimeoutMs } from '../../scripts/_llm-model-timeouts.mjs';
 
 function promptChars(messages: Array<{ role: string; content: string }>): number {
   return messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
@@ -613,7 +616,10 @@ export async function callLlm(opts: LlmCallOptions): Promise<LlmCallResult | nul
             temperature,
             max_tokens: maxTokens,
           }),
-          signal: AbortSignal.timeout(timeoutMs),
+          // #5246: DeepSeek V4 Flash is bimodal — healthy calls finish near 2s,
+          // while stalled calls hang to the old 25s clamp. Cut only this model's
+          // dead tail so the existing provider chain can reach its fallback.
+          signal: AbortSignal.timeout(getLlmAttemptTimeoutMs(creds.model, timeoutMs)),
         });
 
         if (!resp.ok) {
