@@ -429,7 +429,10 @@ async function fetchAndParseRss(
   // publishedAt. Digest reads deliberately trust explicit isOpinion stamps,
   // so warm v6 rows could retain an earlier "0" verdict for one cache TTL.
   // Force a cold parse to stamp the stable ingest-time verdict immediately.
-  const cacheKey = `rss:feed:v7:${variant}:${feed.url}`;
+  // v7→v8: extend the same exclusion policy to duration-led anniversary
+  // explainers ("10 years on from …"). Warm v7 rows already carry an
+  // authoritative isOpinion="0", so force another cold parse on rollout.
+  const cacheKey = `rss:feed:v8:${variant}:${feed.url}`;
 
   try {
     // Read cache unconditionally — the v5 prefix guarantees pre-fix

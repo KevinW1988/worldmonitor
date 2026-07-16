@@ -112,6 +112,30 @@ describe('buildStoryTrackHsetFields — story:track:v1 HSET contract', () => {
     );
   });
 
+  it('carries the Al Jazeera duration-led retrospective verdict from RSS into the digest filter', () => {
+    const result = parseRssXml(
+      `<?xml version="1.0"?><rss><channel><item>
+        <title>10 years on from Turkiye’s failed coup attempt on Erdogan</title>
+        <link>https://www.aljazeera.com/video/newsfeed/2026/7/15/10-years-on-from-turkiyes-failed-coup-attempt-on-erdogan?traffic_source=rss</link>
+        <pubDate>Wed, 15 Jul 2026 20:35:09 +0000</pubDate>
+        <description>10 years on from Turkiye’s coup attempt to overthrow President Erdogan, the country remains divided over its legacy.</description>
+      </item></channel></rss>`,
+      { url: 'https://www.aljazeera.com/xml/rss/all.xml', name: 'Al Jazeera', lang: 'en' },
+      'full',
+    );
+    assert.ok(result, 'RSS parser should return a parse result');
+    const item = result.items[0];
+    assert.ok(item, 'RSS parser should retain the dated item');
+    assert.strictEqual(item.isOpinion, true);
+    const persisted = fieldsToMap(buildStoryTrackHsetFields(item, '1784147709000', 42));
+    assert.strictEqual(persisted.get('isOpinion'), '1');
+    assert.strictEqual(
+      shouldDropOpinionTrack(Object.fromEntries(persisted)),
+      true,
+      'the stamped anniversary retrospective must be excluded before severity bucketing',
+    );
+  });
+
   it('writes isFeelGood as "1" / "0" — stamps the feel-good verdict on the row (Veterans-warplanes anchor)', () => {
     // Sibling to isOpinion stamp. buildDigest excludes isFeelGood="1"
     // rows. Same shared-row semantics: stale "1" from an earlier
@@ -372,7 +396,7 @@ describe('buildStoryTrackHsetFields — story:track:v1 HSET contract', () => {
 });
 
 describe('fetchAndParseRss — cache prefix invalidation contract', () => {
-  it('rss:feed cache prefix is v7 (stable historical-explainer stamp), not v4/v5/v6', () => {
+  it('rss:feed cache prefix is v8 (duration-led historical-explainer stamp), not v4/v5/v6/v7', () => {
     // Pre-PR ParsedItems cached at rss:feed:v4 lack the
     // isEphemeralLiveCoverage field. If a cache hit returned one of those,
     // the falsy-coerce in
@@ -389,18 +413,19 @@ describe('fetchAndParseRss — cache prefix invalidation contract', () => {
       resolve(__dirname, '..', 'server', 'worldmonitor', 'news', 'v1', 'list-feed-digest.ts'),
       'utf-8',
     );
-    // v6→v7: parsed items now stamp historical explainers from their
-    // persisted publication time. Digest reads trust explicit stamps, so
-    // warm v6 rows must not retain a pre-rule "0" verdict for a cache TTL.
+    // v7→v8: duration-led historical explainers now receive the same stable
+    // ingest stamp. Digest reads trust explicit stamps, so warm v7 rows must
+    // not retain a pre-rule "0" verdict for a cache TTL.
     assert.ok(
-      src.includes("`rss:feed:v7:${variant}:${feed.url}`"),
-      'rss:feed cache key must use v7 prefix — see comment above the cacheKey assignment in fetchAndParseRss',
+      src.includes("`rss:feed:v8:${variant}:${feed.url}`"),
+      'rss:feed cache key must use v8 prefix — see comment above the cacheKey assignment in fetchAndParseRss',
     );
     assert.ok(
-      !src.includes("`rss:feed:v6:${variant}:${feed.url}`") &&
+      !src.includes("`rss:feed:v7:${variant}:${feed.url}`") &&
+        !src.includes("`rss:feed:v6:${variant}:${feed.url}`") &&
         !src.includes("`rss:feed:v5:${variant}:${feed.url}`") &&
         !src.includes("`rss:feed:v4:${variant}:${feed.url}`"),
-      'must NOT leave a residual v4/v5/v6 cacheKey assignment — would silently revert the cutover',
+      'must NOT leave a residual v4/v5/v6/v7 cacheKey assignment — would silently revert the cutover',
     );
   });
 });

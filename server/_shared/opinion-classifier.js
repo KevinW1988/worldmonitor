@@ -111,9 +111,18 @@ const CORROBORATING_DESCRIPTION_RE = /\b(?:columnist|op-?ed|opinion piece|our co
 // deliberately conservative: a false positive silently removes a live event.
 // This caught the July 2026 DW ten-year Turkey coup retrospective.
 const HISTORICAL_EXPLAINER_HEADLINE_RE =
-  /^(?:how|why)\b[\s\S]{0,180}\b(?:changed|shaped|transformed|altered|became|remade|defined)\b/i;
+  /^(?:how|why)\b[\s\S]{0,180}\b(?:changed|(?:re)?shaped|transformed|altered|became|remade|defined)\b/i;
+// Duration-led anniversary explainers use a different headline shape from the
+// How/Why form above: "10 years on from <past event>". That shape alone is not
+// enough because publishers also use it for live commemorations and new
+// enforcement actions. Require legacy/lasting-impact framing in the title or
+// description as the second, retrospective signal.
+const HISTORICAL_ANNIVERSARY_HEADLINE_RE =
+  /^(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:years?|decades?)|a\s+decade)\s+(?:on(?:\s+from)?|after|since)\b/i;
+const HISTORICAL_ANNIVERSARY_CONTEXT_RE =
+  /\b(?:legacy|lasting\s+(?:impact|effects?|consequences?)|long[-\s]?term\s+(?:impact|effects?|consequences?)|continues?\s+to\s+(?:shape|influence|define)|remains?\s+divided)\b/i;
 const HISTORICAL_EXPLAINER_TITLE_TIME_RE =
-  /\b(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:years?|decades?)\s+(?:ago|after|later)|anniversary|retrospective|(?:a|this)\s+look back)\b/i;
+  /\b(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:years?|decades?)\s+(?:ago|after|later|on(?:\s+from)?|since)|anniversary|retrospective|(?:a|this)\s+look back)\b/i;
 const HISTORICAL_EXPLAINER_DESCRIPTION_LOOKBACK_RE = /\b(?:a|this)\s+look[-\s]?back\b/i;
 const HISTORICAL_EXPLAINER_LIVE_EVENT_RE = /\b(?:today|overnight|this morning|an?\s+hour ago|hours ago|breaking)\b/i;
 // A four-digit number alone is not an event year: it can be a troop count,
@@ -144,8 +153,13 @@ function hasHistoricalEventYear(title, publishedAt) {
 
 function isHistoricalExplainer(title, description, publishedAt) {
   const headline = title.trim();
+  const fullText = `${headline} ${description}`;
+  if (HISTORICAL_EXPLAINER_LIVE_EVENT_RE.test(fullText)) return false;
+  if (
+    HISTORICAL_ANNIVERSARY_HEADLINE_RE.test(headline) &&
+    HISTORICAL_ANNIVERSARY_CONTEXT_RE.test(fullText)
+  ) return true;
   if (!HISTORICAL_EXPLAINER_HEADLINE_RE.test(headline)) return false;
-  if (HISTORICAL_EXPLAINER_LIVE_EVENT_RE.test(`${headline} ${description}`)) return false;
   if (HISTORICAL_EXPLAINER_TITLE_TIME_RE.test(headline)) return true;
   // Descriptions can corroborate only an explicit look-back label. Broad
   // anniversary wording in article copy is common in live coverage.
