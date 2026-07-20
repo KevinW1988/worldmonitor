@@ -79,7 +79,8 @@ const _planCache = new Map<string, { role: 'free' | 'pro'; expiresAt: number }>(
 const PLAN_CACHE_TTL_MS = 5 * 60 * 1_000;
 
 // Matches the 3s budget used for the other external auth lookup
-// (server/_shared/user-api-key.ts, api/_user-api-key.js VALIDATION_TIMEOUT_MS).
+// — an inline AbortSignal.timeout(3_000) in server/_shared/user-api-key.ts, and
+// the VALIDATION_TIMEOUT_MS constant in api/_user-api-key.js.
 const PLAN_LOOKUP_TIMEOUT_MS = Number(process.env.CLERK_PLAN_LOOKUP_TIMEOUT_MS) || 3_000;
 
 async function lookupPlanFromClerk(userId: string): Promise<'free' | 'pro'> {

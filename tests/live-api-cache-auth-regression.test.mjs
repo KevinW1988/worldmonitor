@@ -17,6 +17,33 @@ const LIVE = process.env.LIVE_API_CACHE_TESTS === '1';
 const API_BASE = stripTrailingSlash(process.env.WM_LIVE_API_BASE_URL || 'https://api.worldmonitor.app');
 const WEB_BASE = stripTrailingSlash(process.env.WM_LIVE_WEB_BASE_URL || 'https://worldmonitor.app');
 const FAKE_WM_KEY = 'wm_0000000000000000000000000000000000000000';
+
+/**
+ * Append a unique cache-buster to a fake-auth probe URL.
+ *
+ * The fake-auth assertions below are about ORIGIN auth logic ("an invalid key
+ * must be rejected no-store"), but they target URLs the edge caches publicly for
+ * 600s, and the cache key does NOT include X-WorldMonitor-Key (`vary: Origin`
+ * only). So a request bearing an invalid key is served whatever anonymous
+ * response is already cached for that URL — verified against production:
+ *
+ *   cache-busted URL + fake key -> x-vercel-cache: MISS -> 401, no-store   (correct)
+ *   already-cached URL + fake key -> x-vercel-cache: HIT  -> 200, public    (cached anon)
+ *
+ * Without busting, these assertions are order-dependent on CDN state that
+ * ordinary traffic controls — including this suite's OWN anonymous probe of the
+ * same URL a few lines later. On a 6-hourly schedule that means intermittent
+ * reds no PR can fix, which is how a guard earns its way into being ignored.
+ *
+ * Busting makes the auth assertion deterministic and keeps it testing the thing
+ * it names. The cached-anonymous behavior is a separate property, pinned
+ * explicitly by its own test below rather than left as a flaky side effect.
+ */
+let _bust = 0;
+function bust(url) {
+  _bust += 1;
+  return `${url}${url.includes('?') ? '&' : '?'}__cb=${Date.now()}-${_bust}`;
+}
 const USER_AGENT = 'WorldMonitor-Live-Cache-Auth-Sweep/1.0';
 const LIVE_API_CACHE_TIMEOUT_MS = positiveIntegerFromEnv(process.env.LIVE_API_CACHE_TIMEOUT_MS, 15_000);
 
@@ -87,7 +114,7 @@ describe(`live API cache/auth regression sweep (${LIVE ? 'ENABLED' : 'SKIPPED - 
   });
 
   it('bootstrap rejects fake auth as dynamic no-store while anonymous weather stays cacheable', async () => {
-    const fake = await fetchText(`${API_BASE}/api/bootstrap?keys=weatherAlerts`, {
+    const fake = await fetchText(bust(`${API_BASE}/api/bootstrap?keys=weatherAlerts`), {
       headers: { 'X-WorldMonitor-Key': FAKE_WM_KEY },
     });
     assert.equal(fake.resp.status, 401);
@@ -100,8 +127,65 @@ describe(`live API cache/auth regression sweep (${LIVE ? 'ENABLED' : 'SKIPPED - 
     assert.match(anon.bodyText, /"data"\s*:/, 'bootstrap anonymous weather: expected data envelope');
   });
 
+  it('PINNED: an invalid key on a publicly-cached URL is served the cached anonymous 200, not a 401', async () => {
+    // Documents real production behavior discovered while wiring this suite into
+    // CI (#5379). The edge cache key does not include X-WorldMonitor-Key
+    // (`vary: Origin` only), so once a public URL is warm, a request carrying an
+    // INVALID key is served the cached anonymous response instead of the origin's
+    // 401. Confirmed by the contrast with the cache-busted probe above, which
+    // gets MISS -> 401 on the very same URL and key.
+    //
+    // Impact today is bounded: the cached body is the anonymous public payload,
+    // so invalid credentials are silently downgraded to anonymous rather than
+    // leaking anything private — and genuinely gated keys still fail closed (see
+    // the premium RPC test below, which 401s regardless of cache state).
+    //
+    // Pinned rather than asserted-away because the SHAPE is the #4497 hazard this
+    // whole suite exists to watch: if an authenticated 200 ever became cacheable,
+    // this same cache-key blindness would serve private data publicly. If this
+    // test starts failing because the URL now 401s, the cache key gained the auth
+    // header — that is an improvement; update this test deliberately.
+    // Tracked separately for a product decision; not fixed here.
+    const warm = `${API_BASE}/api/bootstrap?keys=weatherAlerts`;
+    await fetchText(warm); // ensure the anonymous response is cached
+    const withBadKey = await fetchText(warm, {
+      headers: { 'X-WorldMonitor-Key': FAKE_WM_KEY },
+    });
+
+    if (withBadKey.resp.status === 401) {
+      assertNoStore(withBadKey.resp, 'invalid key on warm URL (now failing closed)');
+      return; // cache key now includes the auth header — strictly better.
+    }
+
+    assert.equal(withBadKey.resp.status, 200, 'expected either a 401 or the cached anonymous 200');
+    assert.match(
+      cacheControl(withBadKey.resp), /\bpublic\b/i,
+      'the served response should be the public cached one, not a private authenticated payload',
+    );
+    assertNoSentinelLeak(withBadKey.bodyText, 'invalid key served from cache');
+    // The load-bearing assertion: whatever is served must be the ANONYMOUS
+    // payload shape. A divergence here would mean private data sitting in a
+    // public cache entry — the actual #4497 incident.
+    //
+    // Asserted STRUCTURALLY, not by byte-length against a second fetch: this is
+    // live weather data that changes between requests, and different edge nodes
+    // hold differently-sized cache entries (observed 61512 vs 61287 for the same
+    // logical response). A size comparison here fails for reasons that have
+    // nothing to do with auth — the exact flakiness this test was added to remove.
+    const body = JSON.parse(withBadKey.bodyText);
+    assert.deepEqual(
+      Object.keys(body).sort(), ['data', 'missing'],
+      'invalid-key response must be the public bootstrap envelope, nothing more',
+    );
+    assert.deepEqual(
+      Object.keys(body.data ?? {}), ['weatherAlerts'],
+      'invalid-key response must carry ONLY the public key that was requested — any additional ' +
+        'key would mean an entitled payload is sitting in a public cache entry (#4497)',
+    );
+  });
+
   it('generated RPCs reject fake auth as dynamic no-store while public no-auth RPCs stay cacheable', async () => {
-    const fake = await fetchText(`${API_BASE}/api/market/v1/list-market-quotes?symbols=AAPL`, {
+    const fake = await fetchText(bust(`${API_BASE}/api/market/v1/list-market-quotes?symbols=AAPL`), {
       headers: { 'X-WorldMonitor-Key': FAKE_WM_KEY },
     });
     assert.equal(fake.resp.status, 401);
@@ -115,7 +199,7 @@ describe(`live API cache/auth regression sweep (${LIVE ? 'ENABLED' : 'SKIPPED - 
   });
 
   it('premium RPC fake auth fails closed without shared cache headers', async () => {
-    const fake = await fetchText(`${API_BASE}/api/market/v1/analyze-stock?symbol=AAPL`, {
+    const fake = await fetchText(bust(`${API_BASE}/api/market/v1/analyze-stock?symbol=AAPL`), {
       headers: { 'X-WorldMonitor-Key': FAKE_WM_KEY },
     });
     assert.equal(fake.resp.status, 401);

@@ -315,6 +315,14 @@ async function checkMcpEntitlementGate(
   const tier = ent?.features?.tier ?? 0;
   const mcpAccess = ent?.features?.mcpAccess === true;
   const validUntil = ent?.validUntil ?? 0;
+  // `!ent` is redundant with the three checks that follow and is unkillable by
+  // mutation testing: every read above optional-chains to a falsy default, so a
+  // falsy `ent` already forces tier=0, mcpAccess=false, validUntil=0 and is
+  // rejected three times over (#5379 verified this across all six falsy values,
+  // and a double mutation dropping `!ent` AND `tier < 1` still 401s). Kept
+  // deliberately as defence-in-depth — it is the ONLY guard that survives if
+  // someone later drops a `?.` or `??` above and a null row starts throwing or
+  // reading undefined. Do not "simplify" it away.
   if (!ent || tier < 1 || !mcpAccess || validUntil < Date.now()) {
     return rejected();
   }
