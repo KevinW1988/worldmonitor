@@ -50,8 +50,9 @@ const apiDir = join(__dirname, '..', 'api');
 const SECRET_VARS = ['secret', 'token', 'bearer'];
 
 /**
- * Build the source-grep pattern. Exported so the meta-test table below
- * exercises the EXACT regex the real scan uses — a table testing a
+ * Build the source-grep pattern. Module-scope (not exported: biome's
+ * noExportsInTest forbids exports from a test file) so the meta-test table
+ * below exercises the EXACT regex the real scan uses — a table testing a
  * copy-pasted duplicate proves nothing.
  *
  * Matches a secret-bearing reference compared with `===`/`!==` against
@@ -69,7 +70,7 @@ const SECRET_VARS = ['secret', 'token', 'bearer'];
  * a plainly non-secret identifier. Those are not timing oracles on a
  * secret, and false positives get guards deleted.
  */
-export function buildSecretComparePattern(fragments: readonly string[] = SECRET_VARS): RegExp {
+function buildSecretComparePattern(fragments: readonly string[] = SECRET_VARS): RegExp {
   const varAlternation = fragments.join('|');
   // A reference whose FINAL segment carries a secret fragment: `secret`,
   // `probeSecret`, `RELAY_SHARED_SECRET`, `req.headers.token`, `a.apiSecret`.
@@ -127,19 +128,18 @@ export function buildSecretComparePattern(fragments: readonly string[] = SECRET_
  * private read-and-match loop, a stripper added to the real scan alone left it
  * green, which is exactly the vacuous-guard bug one level up.
  */
-export function normaliseForScan(source: string): string {
+function normaliseForScan(source: string): string {
   return source;
 }
 
 /**
  * The contract for the matcher: every future edit to
  * buildSecretComparePattern must keep every row green, which makes regex
- * changes provable instead of hopeful. Exported so the table can be
- * audited row-by-row from outside the test runner.
+ * changes provable instead of hopeful.
  *
  * Rows are matched against RAW source, exactly as the real scan now does.
  */
-export const PATTERN_CASES: ReadonlyArray<{ src: string; match: boolean; why: string }> = [
+const PATTERN_CASES: ReadonlyArray<{ src: string; match: boolean; why: string }> = [
   // ---- MUST MATCH: env-var comparisons (the original #3803 shape).
   { src: 'secret !== expected', match: true, why: '#3803 verbatim' },
   { src: 'token === process.env.FOO', match: true, why: 'forward vs env' },
