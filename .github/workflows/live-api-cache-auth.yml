@@ -82,4 +82,23 @@ jobs:
       - name: Live cache/auth regression sweep against production
         env:
           LIVE_API_CACHE_TESTS: '1'
-        run: node --test tests/live-api-cache-auth-regression.test.mjs
+        # The bug this workflow exists to fix is "the suite silently ran zero
+        # assertions and CI went green". Simply setting the env var reintroduces
+        # that exact failure one rename away: the whole suite is a single
+        # `describe(..., { skip: !LIVE })`, and `node --test` exits 0 when every
+        # test is skipped (verified: `tests 0 / pass 0 / fail 0`, exit 0). The
+        # suite's own `assert.equal(LIVE, true)` self-check cannot help — it is
+        # INSIDE the skipped describe.
+        #
+        # So assert that work actually happened. `--test-reporter=tap` is pinned
+        # explicitly rather than relying on the default, because Node picks the
+        # reporter from TTY-ness and a format change would silently break the
+        # grep — turning this guard itself into the vacuous-pass it prevents.
+        # TAP's `# pass N` line is stable and documented.
+        run: |
+          set -o pipefail
+          node --test --test-reporter=tap tests/live-api-cache-auth-regression.test.mjs 2>&1 | tee /tmp/sweep.log
+          if ! grep -qE '^# pass [1-9]' /tmp/sweep.log; then
+            echo "::error::Live sweep executed 0 assertions — the LIVE_API_CACHE_TESTS gate did not engage. The suite is inert, not passing."
+            exit 1
+          fi

@@ -82,6 +82,17 @@ export function buildSecretComparePattern(fragments: readonly string[] = SECRET_
   const member = `(?:[A-Za-z0-9_$]+\\.)*`;
   const ident = `(?<![A-Za-z0-9_$.])${member}[A-Za-z0-9_$]*(?:${varAlternation})[A-Za-z0-9_$]*(?![A-Za-z0-9_$])`;
   const env = `process\\.env\\.[A-Z_a-z][A-Z_a-z0-9]*`;
+  // An env var whose NAME is secret-bearing. Comparing ANY local against one of
+  // these is a timing oracle regardless of what the local is called — which is
+  // the hole that `const a = req.headers.get('x-secret'); if (a !== process.env.X)`
+  // used to slip through, since neither operand is a secret-NAMED identifier.
+  const envSecret = `process\\.env\\.[A-Za-z0-9_]*(?:SECRET|TOKEN|BEARER|PASSWORD|PASSWD|API_?KEY)[A-Za-z0-9_]*`;
+  // A header/param read whose KEY names a secret, compared inline without ever
+  // being bound to a variable: `req.headers.get('x-probe-secret') !== expected`.
+  // This is the codebase's dominant header idiom, so a guard that only sees
+  // identifiers misses the most likely place the bug reappears.
+  const anyIdent = `(?<![A-Za-z0-9_$.])${member}[A-Za-z0-9_$]+`;
+  const secretGet = `\\.\\s*(?:get|getHeader)\\s*\\(\\s*['"\`][^'"\`]*(?:${varAlternation})[^'"\`]*['"\`]\\s*\\)`;
   // NOTE: the operator is bracketed by `\s*`, NOT `.*`. Whitespace is the
   // only thing it can step over, so an operand that begins with a quote is
   // unreachable — `ident` can never start matching inside a string literal.
@@ -91,16 +102,12 @@ export function buildSecretComparePattern(fragments: readonly string[] = SECRET_
   // Forward also covers ident-vs-ident (symmetric, so no reverse needed).
   const forward = `${ident}${op}(?:process\\.env\\.|expected\\b|EXPECTED\\b|${ident})`;
   const reverse = `(?:${env}|expected\\b|EXPECTED\\b)${op}${ident}`;
-  return new RegExp(`(?:${forward}|${reverse})`, 'i');
-}
-
-/**
- * Strip JS comments so a doc comment mentioning the old pattern doesn't
- * false-positive the guard. Exported so the meta-test table runs through
- * the same normalisation the real scan applies.
- */
-export function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  // Secret-named env var vs ANY identifier, either order.
+  const envEither = `(?:${anyIdent}${op}${envSecret}|${envSecret}${op}${anyIdent})`;
+  // Inline secret-named header read vs anything, either order.
+  const getForward = `${secretGet}${op}(?:${anyIdent}|process\\.env\\.|expected\\b|EXPECTED\\b)`;
+  const getReverse = `(?:${anyIdent}|${env}|expected\\b|EXPECTED\\b)${op}[A-Za-z0-9_$]+${secretGet}`;
+  return new RegExp(`(?:${forward}|${reverse}|${envEither}|${getForward}|${getReverse})`, 'i');
 }
 
 /**
@@ -109,8 +116,7 @@ export function stripComments(source: string): string {
  * changes provable instead of hopeful. Exported so the table can be
  * audited row-by-row from outside the test runner.
  *
- * Rows are run through stripComments() first — the same normalisation the
- * real scan applies — so the table reflects what the scan actually sees.
+ * Rows are matched against RAW source, exactly as the real scan now does.
  */
 export const PATTERN_CASES: ReadonlyArray<{ src: string; match: boolean; why: string }> = [
   // ---- MUST MATCH: env-var comparisons (the original #3803 shape).
@@ -178,9 +184,28 @@ export const PATTERN_CASES: ReadonlyArray<{ src: string; match: boolean; why: st
   { src: 'if (status === 200) return', match: false, why: 'no secret operand' },
   { src: 'userInput !== sanitizedInput', match: false, why: 'no secret operand' },
   { src: 'return process.env.FOO', match: false, why: 'no comparison' },
-  // ---- MUST NOT MATCH: comments are stripped before matching.
-  { src: '// legacy: secret !== expectedSecret', match: false, why: 'line comment is stripped' },
-  { src: '/* was: probeSecret !== expectedSecret */', match: false, why: 'block comment is stripped' },
+  // ---- MUST MATCH: neutrally-named local vs a secret-NAMED env var. Neither
+  // operand is a secret-named identifier, so the ident arms miss it entirely —
+  // but reading a secret into `a` does not make comparing it safe.
+  { src: 'if (a !== process.env.RELAY_SHARED_SECRET) return', match: true, why: 'neutral local vs secret-named env var' },
+  { src: 'if (process.env.CRON_SECRET !== value) return', match: true, why: 'secret-named env var vs neutral local, reversed' },
+  { src: 'if (headerValue === process.env.WM_API_TOKEN) return', match: true, why: 'neutral local vs secret-named env var' },
+  // ---- MUST MATCH: inline header read, never bound to a variable. This is the
+  // codebase's dominant header idiom, and #3803 itself was an x-probe-secret
+  // header compare — a guard blind to this shape misses the likeliest recurrence.
+  { src: "if (req.headers.get('x-probe-secret') !== expected) return", match: true, why: 'inline secret-named header read vs expected' },
+  { src: "if (request.headers.get('x-relay-token') === process.env.FOO) return", match: true, why: 'inline secret-named header read vs env' },
+  // ---- MUST NOT MATCH: a NON-secret-named env var vs a neutral local must not
+  // be swept up by the new env arm — that would flag ordinary config checks.
+  { src: 'if (mode !== process.env.NODE_ENV) return', match: false, why: 'env var name is not secret-bearing' },
+  { src: 'if (process.env.VERCEL_ENV === envName) return', match: false, why: 'env var name is not secret-bearing' },
+  // ---- MUST NOT MATCH: a header read whose KEY is not secret-bearing.
+  { src: "if (req.headers.get('content-type') !== expected) return", match: false, why: 'header key is not secret-bearing' },
+  // ---- Comments are NOT stripped any more (the stripper deleted 30% of api/,
+  // including real exported code, letting the scan pass vacuously — see the
+  // planted-violation test below). Raw scanning is safe because these shapes are
+  // not ones anyone writes in prose; a real prose hit would go to ALLOWLIST_FILES.
+  { src: '// legacy: secret !== expectedSecret', match: true, why: 'raw scan: prose is matched too, deliberately' },
 ];
 
 // Files that legitimately compare these against constants for reasons
@@ -219,7 +244,7 @@ describe('no non-timing-safe secret comparison in api/ (#3803)', () => {
       const rel = file.slice(file.indexOf('/api/') + 1);
       if (ALLOWLIST_FILES.has(rel)) continue;
       const source = await readFile(file, 'utf8');
-      if (pattern.test(stripComments(source))) {
+      if (pattern.test(source)) {
         violations.push(rel);
       }
     }
@@ -229,6 +254,38 @@ describe('no non-timing-safe secret comparison in api/ (#3803)', () => {
       [],
       `Non-timing-safe secret comparison detected in: ${violations.join(', ')}. ` +
         `Use timingSafeEqual from server/_shared/internal-auth.ts instead. See issue #3803.`,
+    );
+  });
+
+  it('the scan can actually FAIL — a violation planted in every real api/ file is caught', async () => {
+    // This guard asserts an EMPTY list, so anything that quietly shrinks what it
+    // reads produces a silent vacuous pass rather than a failure. That is not
+    // hypothetical: this test previously ran `pattern.test(stripComments(source))`,
+    // and the naive stripper deleted 30.2% of api/ by bytes — a glob like
+    // `/*.openapi.json` inside a `//` comment reads as a block-comment OPENER and
+    // ate 4160 bytes of api/mcp/types.ts including `export interface RpcToolDef`,
+    // while `//` inside a URL literal truncated the rest of the line. A violation
+    // landing in a swallowed region was invisible.
+    //
+    // Planting a known-bad line into EVERY file and requiring the scan to flag
+    // every one of them makes that class of blindness impossible to reintroduce:
+    // any future normalisation step that eats real code turns this test red.
+    const pattern = buildSecretComparePattern();
+    const files = await walk(apiDir);
+    assert.ok(files.length > 50, `expected the api/ walk to find real files, got ${files.length}`);
+
+    const missed: string[] = [];
+    for (const file of files) {
+      const source = await readFile(file, 'utf8');
+      const planted = `${source}\nif (probeSecret !== expectedSecret) return unauthorized();\n`;
+      if (!pattern.test(planted)) missed.push(file.slice(file.indexOf('/api/') + 1));
+    }
+
+    assert.deepEqual(
+      missed,
+      [],
+      `The scan failed to detect a planted violation in ${missed.length} file(s): ${missed.slice(0, 5).join(', ')}. ` +
+        `Something is dropping real source before the pattern runs — the guard is passing vacuously.`,
     );
   });
 
@@ -256,7 +313,7 @@ describe('no non-timing-safe secret comparison in api/ (#3803)', () => {
 
     const failures: string[] = [];
     for (const { src, match, why } of PATTERN_CASES) {
-      const actual = pattern.test(stripComments(src));
+      const actual = pattern.test(src);
       if (actual !== match) {
         failures.push(
           `  ${actual ? 'MATCHED but must not' : 'MISSED but must match'}: ${JSON.stringify(src)}  (${why})`,

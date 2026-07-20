@@ -282,7 +282,7 @@ describe("#5379 — entitlement resolution outcomes are pinned (fail-open is del
   test("null (transient failure OR no row — indistinguishable) → SERVED", async () => {
     // getEntitlements collapses Redis errors, Convex errors, timeouts, missing
     // CONVEX_SITE_URL, and a genuine "no entitlement row" all into null
-    // (entitlement-check.ts:192-233). Fail-closed here would deny paying
+    // (_getEntitlementsImpl() in entitlement-check.ts). Fail-closed here would deny paying
     // customers during any backend blip, so null is treated as "unknown".
     getEntitlements.mockImplementation(async () => null);
     const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
@@ -333,35 +333,52 @@ describe("#5379 — entitlement resolution outcomes are pinned (fail-open is del
     expect(routeHandler).not.toHaveBeenCalled();
   });
 
-  // ── KNOWN GAP, pinned so it stays visible ─────────────────────────────────
+  // ── CLOSED GAP, pinned so it cannot silently reopen ───────────────────────
 
-  test("KNOWN GAP: apiAccess:true with a MISSING validUntil → served (expiry unchecked)", async () => {
-    // `undefined < Date.now()` is false, so a row that claims apiAccess but
-    // carries no expiry is served indefinitely — the expiry arm silently
-    // no-ops. This is WIDER than the documented null posture: it is not bounded
-    // by the warm path, because re-resolving returns the same shape every time.
+  test("apiAccess:true with a MISSING validUntil → 403 (expiry cannot be skipped)", async () => {
+    // Was a KNOWN GAP when this suite landed: `undefined < Date.now()` is false,
+    // so a row claiming apiAccess but carrying no expiry was SERVED indefinitely
+    // — wider than the documented null posture, because it is not bounded by the
+    // warm path (re-resolving returns the same shape every time, so there is
+    // nothing to recover to). Closed by defaulting the expiry arm with `?? 0` in
+    // server/gateway.ts, which also makes the gateway agree with the sibling MCP
+    // gate (api/mcp/auth.ts reads `ent?.validUntil ?? 0`).
     //
-    // Reachability is narrow today — getEntitlements' staleness gate
-    // (entitlement-check.ts:180-185) treats a cached row with no validUntil as
-    // stale and refetches from Convex — but Convex's response is returned with
-    // NO shape validation (entitlement-check.ts:205), so a malformed upstream
-    // payload reaches this gate intact.
+    // Reachability was narrow but real: getEntitlements' cached-row freshness
+    // check treats a row with no validUntil as stale and refetches from Convex,
+    // but the Convex response is cast to CachedEntitlements with NO runtime shape
+    // validation, so a malformed upstream payload reached this gate intact.
     //
-    // This test pins CURRENT behavior; it is not an endorsement. If the gate is
-    // hardened to require a numeric validUntil, this test SHOULD go red — flip
-    // it to expect 403 deliberately rather than deleting it.
+    // Deleting the `?? 0` turns this test red. That is the point — keep it.
     getEntitlements.mockImplementation(
       async () => ({ planKey: "api_starter", features: { tier: 2, apiAccess: true, apiRateLimit: 60 } }) as never,
     );
     const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
+    expect(res.status).toBe(403);
+    expect(routeHandler).not.toHaveBeenCalled();
+  });
+
+  test("apiAccess:true with a NON-NUMERIC validUntil → still served (residual gap, pinned)", async () => {
+    // `?? 0` only defaults null/undefined. A string date compares false against
+    // Date.now() and is served. Narrower than the missing-field case but the same
+    // shape of hole; the real fix is runtime shape validation of the Convex
+    // response in getEntitlements, not another special case here. Pinned so the
+    // residual risk stays visible rather than living only in a review comment.
+    getEntitlements.mockImplementation(
+      async () => ({
+        planKey: "api_starter",
+        features: { tier: 2, apiAccess: true, apiRateLimit: 60 },
+        validUntil: "2020-01-01",
+      }) as never,
+    );
+    const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
     expect(res.status).toBe(200);
-    expect(routeHandler).toHaveBeenCalledTimes(1);
   });
 
   test("a THROWING getEntitlements does NOT fail open — it propagates", async () => {
     // The fail-open posture is "null ⇒ served", and it holds only because
     // getEntitlements catches everything internally and returns null
-    // (entitlement-check.ts:229-233). A rejection is a DIFFERENT posture: it
+    // (_getEntitlementsImpl()'s outer `catch (err)`). A rejection is a DIFFERENT posture: it
     // escapes the gateway handler entirely (no try/catch wraps it) and surfaces
     // as a 500 — deny-by-crash, not serve.
     //

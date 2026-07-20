@@ -92,7 +92,12 @@ async function lookupPlanFromClerk(userId: string): Promise<'free' | 'pro'> {
     // (non-template) session token, so a Clerk API stall would otherwise let an
     // authenticated caller pin gateway invocations open indefinitely.
     const resp = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
-      headers: { Authorization: `Bearer ${CLERK_SECRET_KEY}` },
+      headers: {
+        Authorization: `Bearer ${CLERK_SECRET_KEY}`,
+        // AGENTS.md: always set User-Agent on server-side fetches. Matches the
+        // sibling auth lookups (entitlement-check.ts, _shared/user-api-key.ts).
+        'User-Agent': 'worldmonitor-gateway/1.0',
+      },
       signal: AbortSignal.timeout(PLAN_LOOKUP_TIMEOUT_MS),
     });
     if (!resp.ok) return 'free';

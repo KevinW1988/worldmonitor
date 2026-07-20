@@ -1205,7 +1205,7 @@ export function createDomainGateway(
       // AFFIRMATIVELY inactive/expired entitlement — the systematic churn case
       // (#4611). `getEntitlements` collapses transient failure (Redis/Convex
       // error, timeout, missing CONVEX_SITE_URL) and a genuine "no row" into the
-      // same `null` (entitlement-check.ts:192-233), so they are NOT
+      // same `null` (_getEntitlementsImpl() in entitlement-check.ts), so they are NOT
       // distinguishable here and fail-closed would punish both alike.
       //
       // WHY: blast radius. Fail-closed turns any Convex/Upstash blip into a
@@ -1219,21 +1219,31 @@ export function createDomainGateway(
       //      lapsed user must sustain a backend outage, not just wait one out.
       //   2. Not reachable by the never-subscribed. This gate only runs for
       //      `isUserApiKey`, and minting a wm_ key ITSELF requires an active
-      //      entitlement with apiAccess (convex/apiKeys.ts:31-41). No entitlement
+      //      entitlement with apiAccess (convex/apiKeys.ts createApiKey's API_ACCESS_REQUIRED gate). No entitlement
       //      row ⇒ no key ⇒ this path is never entered.
       //   3. Tier-gated routes do NOT inherit this posture. checkEntitlement
-      //      fail-CLOSES on null (entitlement-check.ts:289, covered by
+      //      fail-CLOSES on null (checkEntitlementDetailed()'s `if (!ent)` branch, covered by
       //      server/__tests__/entitlement-check.test.ts:92), so an unresolvable
       //      entitlement yields at most the keyed non-tier-gated surface — never
       //      the tier-gated paid endpoints.
       //   4. Only `null`/`undefined` fail open. A resolved-but-malformed row
-      //      fails CLOSED: `{features:{}}` ⇒ 403 via the `!apiAccess` arm below.
+      //      fails CLOSED: `{features:{}}` ⇒ 403 via the `!apiAccess` arm below,
+      //      and a row with apiAccess:true but NO validUntil ⇒ 403 via the
+      //      `?? 0` default on the expiry arm. That default is what MAKES this
+      //      bound true — without it `undefined < Date.now()` is false and such a
+      //      row is served forever, unbounded by the warm path (it re-resolves to
+      //      the same shape every time). Do not remove it.
+      //      NOTE: `?? 0` deliberately does not catch a non-numeric validUntil
+      //      (e.g. a string date), which would compare false and serve.
+      //      getEntitlements casts the Convex response without runtime shape
+      //      validation, so the real fix is a shape guard there; tracked, not
+      //      silently assumed away.
       //
       // WHAT IS *NOT* BOUNDED — the caveat to bound 1. The warm-path argument
       // assumes the entitlement eventually resolves. It does not if the deploy is
       // MISCONFIGURED: getEntitlements returns null unconditionally when
       // CONVEX_SITE_URL or CONVEX_SERVER_SHARED_SECRET is unset
-      // (entitlement-check.ts:192-201), so this gate is disabled for every user
+      // (_getEntitlementsImpl()'s `if (!convexSiteUrl || !convexSharedSecret)` guard), so this gate is disabled for every user
       // on every request, permanently and silently — no outage to wait out, no
       // cache to warm. Only a one-time console.warn marks it. A missing Convex
       // env var is therefore a P1 auth regression, not a degraded mode; alert on
@@ -1241,12 +1251,19 @@ export function createDomainGateway(
       //
       // LOAD-BEARING DEPENDENCY: fail-open here means "served", and it holds
       // only because getEntitlements never throws — it catches everything
-      // internally and returns null (entitlement-check.ts:229-233). If that
+      // internally and returns null (_getEntitlementsImpl()'s outer `catch (err)`). If that
       // catch-all is ever removed, a rejection propagates out of this handler as
       // a 500 instead, silently converting this posture into deny-by-crash.
+      // `?? 0` is load-bearing, not defensive noise: a row with apiAccess:true and
+      // NO validUntil would otherwise evaluate `undefined < Date.now()` as false and
+      // be SERVED with expiry unchecked — and unlike the null posture above, nothing
+      // bounds it (re-resolving returns the same shape forever, so there is no warm
+      // path to recover to). Defaulting a missing expiry to 0 denies instead, and
+      // makes this gate agree with the sibling MCP gate, which already reads
+      // `ent?.validUntil ?? 0` (api/mcp/auth.ts, checkMcpEntitlementGate).
       if (
         userKeyEntitlement &&
-        (!userKeyEntitlement.features.apiAccess || userKeyEntitlement.validUntil < Date.now())
+        (!userKeyEntitlement.features.apiAccess || (userKeyEntitlement.validUntil ?? 0) < Date.now())
       ) {
         emitRequest(403, 'tier_403', null);
         return createGatewayAuthErrorResponse(
