@@ -108,6 +108,7 @@ const ENDPOINT_ENTITLEMENTS: Record<string, number> = {
 
 const CONVEX_INTERNAL_ENTITLEMENTS_PATH = '/api/internal-entitlements';
 let _didWarnMissingConvexSharedSecret = false;
+let _didWarnMissingConvexSiteUrl = false;
 
 function getConvexSharedSecret(): string {
   const secret = process.env.CONVEX_SERVER_SHARED_SECRET ?? '';
@@ -116,6 +117,22 @@ function getConvexSharedSecret(): string {
     console.warn('[entitlement-check] CONVEX_SERVER_SHARED_SECRET not set; Convex fallback disabled');
   }
   return secret;
+}
+
+/**
+ * Warn once when CONVEX_SITE_URL is missing. Its sibling above covered only the
+ * shared secret, so a deploy missing ONLY the site URL disabled the Convex
+ * fallback — and therefore the #4611 apiAccess gate, which fail-OPENS on null —
+ * with no signal at all. The MISCONFIGURATION HAZARD note below claims this
+ * state is surfaced; this is what makes that claim true.
+ */
+function getConvexSiteUrl(): string {
+  const siteUrl = process.env.CONVEX_SITE_URL ?? '';
+  if (!siteUrl && !_didWarnMissingConvexSiteUrl) {
+    _didWarnMissingConvexSiteUrl = true;
+    console.warn('[entitlement-check] CONVEX_SITE_URL not set; Convex fallback disabled');
+  }
+  return siteUrl;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,15 +214,18 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
     }
 
     // Convex fallback on cache miss or expired cache
-    const convexSiteUrl = process.env.CONVEX_SITE_URL;
+    const convexSiteUrl = getConvexSiteUrl();
     const convexSharedSecret = getConvexSharedSecret();
     // MISCONFIGURATION HAZARD: a deploy missing CONVEX_SITE_URL or
     // CONVEX_SERVER_SHARED_SECRET returns null for EVERY user on EVERY request,
     // permanently. For the fail-OPEN caller (the #4611 apiAccess gate in
     // server/gateway.ts) that is not a transient blip that the 15-min cache heals
     // — there is no warm path to recover to, so the gate is disabled silently and
-    // indefinitely. Only the one-time console.warn in getConvexSharedSecret()
-    // surfaces it. Treat missing Convex config as a P1, not a degraded mode.
+    // indefinitely. The one-time console.warn in EACH of getConvexSiteUrl() and
+    // getConvexSharedSecret() is the only signal — deliberately one per variable,
+    // because warning on only one of the two (as this did before #5379) leaves the
+    // other misconfiguration completely silent. Treat missing Convex config as a
+    // P1, not a degraded mode.
     if (!convexSiteUrl || !convexSharedSecret) return null;
 
     const response = await fetch(`${convexSiteUrl}${CONVEX_INTERNAL_ENTITLEMENTS_PATH}`, {

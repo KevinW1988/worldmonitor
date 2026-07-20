@@ -105,7 +105,17 @@ async function lookupPlanFromClerk(userId: string): Promise<'free' | 'pro'> {
     const role: 'free' | 'pro' = user.public_metadata?.plan === 'pro' ? 'pro' : 'free';
     _planCache.set(userId, { role, expiresAt: Date.now() + PLAN_CACHE_TTL_MS });
     return role;
-  } catch {
+  } catch (err) {
+    // Log, don't swallow. This path downgrades a PRO user to 'free' for the
+    // request, and the AbortSignal.timeout added above made it newly reachable
+    // from a plain Clerk stall rather than only from a hard network error. With
+    // no log, a sustained Clerk outage is indistinguishable from a fleet of
+    // genuinely free users — the failure mode is silent revenue-affecting
+    // degradation. Not cached (see above), so the next request retries.
+    console.warn(
+      '[auth-session] lookupPlanFromClerk failed, degrading to free:',
+      err instanceof Error ? err.message : String(err),
+    );
     return 'free';
   }
 }
