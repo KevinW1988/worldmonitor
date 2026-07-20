@@ -111,6 +111,27 @@ export function buildSecretComparePattern(fragments: readonly string[] = SECRET_
 }
 
 /**
+ * THE SINGLE NORMALISATION SEAM between reading a file and matching it.
+ *
+ * Today it is the identity function, deliberately: the previous version of this
+ * guard stripped comments here and the naive stripper ate 30.2% of api/ by bytes
+ * (a `/*`-containing glob inside a `//` comment read as a block-comment opener
+ * and swallowed 4160 bytes of api/mcp/types.ts including real exported code), so
+ * violations in swallowed regions were invisible and the guard passed vacuously.
+ *
+ * Anything that ever transforms source before matching MUST go here rather than
+ * inline at a call site, because the two tests below both run through this
+ * function — the real scan and the planted-violation companion. That shared
+ * routing is what makes the companion test a real safety net: a normalisation
+ * step added here that eats source turns it red. When the companion had its own
+ * private read-and-match loop, a stripper added to the real scan alone left it
+ * green, which is exactly the vacuous-guard bug one level up.
+ */
+export function normaliseForScan(source: string): string {
+  return source;
+}
+
+/**
  * The contract for the matcher: every future edit to
  * buildSecretComparePattern must keep every row green, which makes regex
  * changes provable instead of hopeful. Exported so the table can be
@@ -244,7 +265,7 @@ describe('no non-timing-safe secret comparison in api/ (#3803)', () => {
       const rel = file.slice(file.indexOf('/api/') + 1);
       if (ALLOWLIST_FILES.has(rel)) continue;
       const source = await readFile(file, 'utf8');
-      if (pattern.test(source)) {
+      if (pattern.test(normaliseForScan(source))) {
         violations.push(rel);
       }
     }
@@ -274,13 +295,41 @@ describe('no non-timing-safe secret comparison in api/ (#3803)', () => {
     const files = await walk(apiDir);
     assert.ok(files.length > 50, `expected the api/ walk to find real files, got ${files.length}`);
 
+    const VIOLATION = 'if (probeSecret !== expectedSecret) return unauthorized();';
     const missed: string[] = [];
+    const shrunk: string[] = [];
+
     for (const file of files) {
+      const rel = file.slice(file.indexOf('/api/') + 1);
       const source = await readFile(file, 'utf8');
-      const planted = `${source}\nif (probeSecret !== expectedSecret) return unauthorized();\n`;
-      if (!pattern.test(planted)) missed.push(file.slice(file.indexOf('/api/') + 1));
+
+      // (a) Nothing may DROP source. This is the direct statement of the property
+      // the old stripper violated, and it fails on the first byte lost rather
+      // than waiting for a violation to happen to land in a swallowed region.
+      if (normaliseForScan(source).length !== source.length) shrunk.push(rel);
+
+      // (b) A violation must be caught wherever it sits. Planted at three
+      // positions — top, middle, bottom — because a swallowing normaliser eats a
+      // REGION, not a whole file: appending only at the end would survive a
+      // stripper that ate the middle, and the companion would stay green while
+      // the real scan was blind. Each candidate goes through the SAME
+      // normaliseForScan the real scan uses.
+      const lines = source.split('\n');
+      const mid = Math.floor(lines.length / 2);
+      const candidates = [
+        `${VIOLATION}\n${source}`,
+        [...lines.slice(0, mid), VIOLATION, ...lines.slice(mid)].join('\n'),
+        `${source}\n${VIOLATION}\n`,
+      ];
+      if (!candidates.every((c) => pattern.test(normaliseForScan(c)))) missed.push(rel);
     }
 
+    assert.deepEqual(
+      shrunk,
+      [],
+      `normaliseForScan DROPPED source for ${shrunk.length} file(s): ${shrunk.slice(0, 5).join(', ')}. ` +
+        `Anything the scan cannot see, it cannot flag — this is how the guard silently stops working.`,
+    );
     assert.deepEqual(
       missed,
       [],
