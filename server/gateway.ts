@@ -1195,13 +1195,55 @@ export function createDomainGateway(
     if (isUserApiKey && sessionUserId) {
       userKeyEntitlement = await getEntitlements(sessionUserId);
       recordUsageEntitlement(userKeyEntitlement);
-      // Fail-OPEN on an unresolved entitlement (null ⇒ transient Convex/cache
-      // failure, indistinguishable from "no row"): mirrors the #3199 block below
-      // and avoids 403-ing an ACTIVE subscriber fleet-wide during a backend
-      // blip. Reject only on an AFFIRMATIVELY inactive/expired entitlement — the
-      // systematic churn case (#4611), always resolvable under normal operation
-      // (the warm 15-min entitlement cache closes the leak; an outage degrades
-      // to prior behavior rather than denying paying customers).
+      // ── DELIBERATE SECURITY POSTURE: fail-OPEN on an unresolved entitlement ──
+      // Re-affirmed in #5379 (auth adversarial sweep). This is a considered
+      // choice, NOT an oversight — do not "harden" it to fail-closed without
+      // re-opening that decision. Pinned in both directions by
+      // server/__tests__/gateway-user-key-apiaccess.test.ts.
+      //
+      // POSTURE: `null` is "unknown", not "denied". Reject only on an
+      // AFFIRMATIVELY inactive/expired entitlement — the systematic churn case
+      // (#4611). `getEntitlements` collapses transient failure (Redis/Convex
+      // error, timeout, missing CONVEX_SITE_URL) and a genuine "no row" into the
+      // same `null` (entitlement-check.ts:192-233), so they are NOT
+      // distinguishable here and fail-closed would punish both alike.
+      //
+      // WHY: blast radius. Fail-closed turns any Convex/Upstash blip into a
+      // fleet-wide 403 for every paying API customer at once. Fail-open turns
+      // the same blip into a bounded revenue leak. An outage degrades to
+      // pre-#4611 behavior rather than denying customers who paid.
+      //
+      // WHAT BOUNDS THE RISK — the leak is not open-ended:
+      //   1. Warm path re-resolves. The 15-min entitlement cache means a
+      //      downgraded row resolves within minutes and 403s from then on. The
+      //      lapsed user must sustain a backend outage, not just wait one out.
+      //   2. Not reachable by the never-subscribed. This gate only runs for
+      //      `isUserApiKey`, and minting a wm_ key ITSELF requires an active
+      //      entitlement with apiAccess (convex/apiKeys.ts:31-41). No entitlement
+      //      row ⇒ no key ⇒ this path is never entered.
+      //   3. Tier-gated routes do NOT inherit this posture. checkEntitlement
+      //      fail-CLOSES on null (entitlement-check.ts:289, covered by
+      //      server/__tests__/entitlement-check.test.ts:92), so an unresolvable
+      //      entitlement yields at most the keyed non-tier-gated surface — never
+      //      the tier-gated paid endpoints.
+      //   4. Only `null`/`undefined` fail open. A resolved-but-malformed row
+      //      fails CLOSED: `{features:{}}` ⇒ 403 via the `!apiAccess` arm below.
+      //
+      // WHAT IS *NOT* BOUNDED — the caveat to bound 1. The warm-path argument
+      // assumes the entitlement eventually resolves. It does not if the deploy is
+      // MISCONFIGURED: getEntitlements returns null unconditionally when
+      // CONVEX_SITE_URL or CONVEX_SERVER_SHARED_SECRET is unset
+      // (entitlement-check.ts:192-201), so this gate is disabled for every user
+      // on every request, permanently and silently — no outage to wait out, no
+      // cache to warm. Only a one-time console.warn marks it. A missing Convex
+      // env var is therefore a P1 auth regression, not a degraded mode; alert on
+      // it rather than relying on this gate to notice.
+      //
+      // LOAD-BEARING DEPENDENCY: fail-open here means "served", and it holds
+      // only because getEntitlements never throws — it catches everything
+      // internally and returns null (entitlement-check.ts:229-233). If that
+      // catch-all is ever removed, a rejection propagates out of this handler as
+      // a 500 instead, silently converting this posture into deny-by-crash.
       if (
         userKeyEntitlement &&
         (!userKeyEntitlement.features.apiAccess || userKeyEntitlement.validUntil < Date.now())

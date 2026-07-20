@@ -5,10 +5,20 @@
  * Convex fallback on cache miss. Returns a 403 Response for tier-gated endpoints
  * when the user lacks the required tier.
  *
- * Fail-closed behavior:
+ * Fail-closed behavior OF checkEntitlement() — this is NOT a property of the
+ * module as a whole, see the caller-dependent note below:
  *   - No userId header on a gated endpoint -> 403 (authentication required)
  *   - Redis miss + Convex failure -> 403 (unable to verify entitlements)
  *   - Endpoint not in ENDPOINT_ENTITLEMENTS -> allow (unrestricted)
+ *
+ * What a null from getEntitlements() MEANS is caller-dependent. It signals
+ * "unresolved", never "affirmatively unentitled", and the two callers below
+ * deliberately draw opposite conclusions from it:
+ *   - checkEntitlement()/checkEntitlementDetailed() fail-CLOSE (403).
+ *   - the #4611 user-API-key apiAccess gate in server/gateway.ts fail-OPENS
+ *     (serves), so a backend blip cannot 403 every paying subscriber at once.
+ *     Re-affirmed in #5379 — read the posture comment at that call site before
+ *     "hardening" it; it is a decision, not an oversight.
  */
 
 import { getCachedJson, setCachedJson } from './redis';
@@ -189,6 +199,13 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
     // Convex fallback on cache miss or expired cache
     const convexSiteUrl = process.env.CONVEX_SITE_URL;
     const convexSharedSecret = getConvexSharedSecret();
+    // MISCONFIGURATION HAZARD: a deploy missing CONVEX_SITE_URL or
+    // CONVEX_SERVER_SHARED_SECRET returns null for EVERY user on EVERY request,
+    // permanently. For the fail-OPEN caller (the #4611 apiAccess gate in
+    // server/gateway.ts) that is not a transient blip that the 15-min cache heals
+    // — there is no warm path to recover to, so the gate is disabled silently and
+    // indefinitely. Only the one-time console.warn in getConvexSharedSecret()
+    // surfaces it. Treat missing Convex config as a P1, not a degraded mode.
     if (!convexSiteUrl || !convexSharedSecret) return null;
 
     const response = await fetch(`${convexSiteUrl}${CONVEX_INTERNAL_ENTITLEMENTS_PATH}`, {
@@ -227,7 +244,17 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
 
     return null;
   } catch (err) {
-    // Fail-closed: any error in entitlement lookup returns null (caller blocks the request)
+    // Any error collapses to null — meaning "entitlement UNRESOLVED", NOT
+    // "caller blocks the request". Whether null blocks is decided by the caller,
+    // and the two callers disagree on purpose: checkEntitlementDetailed() below
+    // fail-CLOSES (403), while the #4611 apiAccess gate in server/gateway.ts
+    // fail-OPENS (serves). See the module docstring.
+    //
+    // This catch-all is load-bearing for that fail-open: it is what guarantees
+    // getEntitlements never THROWS. A rejection would escape the gateway handler
+    // (nothing wraps it) and surface as a 500, silently converting the fail-open
+    // posture into deny-by-crash. Pinned by
+    // server/__tests__/gateway-user-key-apiaccess.test.ts.
     console.warn('[entitlement-check] getEntitlements failed:', err instanceof Error ? err.message : String(err));
     return null;
   }
