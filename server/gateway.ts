@@ -1127,6 +1127,30 @@ export function createDomainGateway(
       request.headers.get('X-Api-Key') ??
       '';
     if (keyCheck.required && !keyCheck.valid && wmKey.startsWith('wm_')) {
+      // Unknown wm_ credentials require a Convex-backed hash lookup before we
+      // know the account principal. Bound that unattributed work by IP first:
+      // otherwise an attacker can rotate syntactically-valid keys and evade the
+      // per-hash negative cache while every request reaches Convex. The 600/min
+      // ceiling matches the repo-wide global IP budget and deliberately fails
+      // closed when Redis is unavailable because this guard protects the auth
+      // backend itself.
+      const validationGuardResponse = await checkFailClosedScopedIpRateLimit(
+        request,
+        'user-api-key:pre-auth-validation',
+        600,
+        '60 s',
+        corsHeaders,
+      );
+      if (validationGuardResponse) {
+        const reason =
+          validationGuardResponse.status === 503 &&
+          validationGuardResponse.headers.get('X-RateLimit-Mode') === 'degraded'
+            ? 'rate_limit_degraded'
+            : 'rate_limit_429';
+        emitRequest(validationGuardResponse.status, reason, null);
+        return validationGuardResponse;
+      }
+
       const { validateUserApiKey } = await import('./_shared/user-api-key');
       const userKeyResult = await validateUserApiKey(wmKey);
       if (userKeyResult) {

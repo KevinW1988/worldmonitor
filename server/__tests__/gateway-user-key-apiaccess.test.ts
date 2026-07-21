@@ -36,11 +36,13 @@ vi.mock("../_shared/api-key-rate-limit", () => ({
 
 // --- Stub the per-IP layer: spy whether checkRateLimit runs. -----------------
 const checkRateLimit = vi.fn().mockResolvedValue(null);
+const checkFailClosedScopedIpRateLimit = vi.fn().mockResolvedValue(null);
 vi.mock("../_shared/rate-limit", async (importActual) => {
   const actual = await importActual<typeof import("../_shared/rate-limit")>();
   return {
     ...actual,
     checkRateLimit: (...a: unknown[]) => checkRateLimit(...a),
+    checkFailClosedScopedIpRateLimit: (...a: unknown[]) => checkFailClosedScopedIpRateLimit(...a),
     checkEndpointRateLimit: vi.fn().mockResolvedValue(null),
     hasEndpointRatePolicy: () => false,
   };
@@ -139,6 +141,7 @@ beforeEach(() => {
     count: 1, overCeiling: false, metered: true, retryAfterSec: 100, rollback: async () => {},
   });
   checkRateLimit.mockClear().mockResolvedValue(null);
+  checkFailClosedScopedIpRateLimit.mockReset().mockResolvedValue(null);
   routeHandler.mockClear();
   // Re-install the default resolver, don't just clear calls. `mockClear()` wipes
   // call history but NOT the implementation, so a test that overrides
@@ -159,6 +162,41 @@ afterEach(() => {
 });
 
 describe("#4611 — expired wm_ key rejected on all route classes", () => {
+  test("rotating unknown wm_ keys are bounded before Convex validation", async () => {
+    validateUserApiKey.mockResolvedValue(null);
+    checkFailClosedScopedIpRateLimit
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "Too many requests" }), {
+        status: 429,
+        headers: { "Content-Type": "application/json" },
+      }));
+
+    const first = await makeGateway()(keyReq(REGULAR_PATH, "GET", "wm_rotating_guess_1"), ctx);
+    const second = await makeGateway()(keyReq(REGULAR_PATH, "GET", "wm_rotating_guess_2"), ctx);
+    const blocked = await makeGateway()(keyReq(REGULAR_PATH, "GET", "wm_rotating_guess_3"), ctx);
+
+    expect(first.status).toBe(401);
+    expect(second.status).toBe(401);
+    expect(blocked.status).toBe(429);
+    expect(await first.json()).toEqual({ error: "Invalid API key" });
+    expect(first.headers.get("Cache-Control")).toBe("no-store");
+    expect(checkFailClosedScopedIpRateLimit).toHaveBeenCalledTimes(3);
+    expect(checkFailClosedScopedIpRateLimit).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Request),
+      "user-api-key:pre-auth-validation",
+      600,
+      "60 s",
+      expect.any(Object),
+    );
+    expect(validateUserApiKey).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(await second.json())).not.toMatch(/gateway validation|Convex|keyHash/i);
+    expect(checkFailClosedScopedIpRateLimit.mock.invocationCallOrder[0]).toBeLessThan(
+      validateUserApiKey.mock.invocationCallOrder[0],
+    );
+  });
+
   // --- apiAccess:false (downgraded) → 403 everywhere ------------------------
   const DOWNGRADED: Ent = { planKey: "pro", features: { tier: 1, apiAccess: false, apiRateLimit: 0 }, validUntil: Date.now() + 86_400_000 };
 

@@ -31,7 +31,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -255,6 +256,41 @@ async function walk(dir: string): Promise<string[]> {
 }
 
 describe('no non-timing-safe secret comparison in api/ (#3803)', () => {
+  it('the source walk includes every supported extension and excludes tests and generated trees', async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), 'wm-secret-scan-walk-'));
+    try {
+      await Promise.all([
+        mkdir(join(fixtureRoot, 'nested'), { recursive: true }),
+        mkdir(join(fixtureRoot, 'node_modules'), { recursive: true }),
+        mkdir(join(fixtureRoot, '.next'), { recursive: true }),
+        mkdir(join(fixtureRoot, 'dist'), { recursive: true }),
+      ]);
+
+      const included = ['plain.ts', 'plain.js', 'plain.mjs', 'plain.cjs', 'nested/deep.ts'];
+      const excluded = [
+        'plain.test.ts',
+        'plain.test.mjs',
+        'plain.txt',
+        'node_modules/vendor.ts',
+        '.next/generated.js',
+        'dist/bundle.cjs',
+      ];
+      await Promise.all(
+        [...included, ...excluded].map(async (relativePath) => {
+          const fullPath = join(fixtureRoot, relativePath);
+          await writeFile(fullPath, '// fixture\n');
+        }),
+      );
+
+      const actual = (await walk(fixtureRoot))
+        .map((file) => file.slice(fixtureRoot.length + 1))
+        .sort();
+      assert.deepEqual(actual, [...included].sort());
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it('no `<secretish> (===|!==) (process.env.* | expected* | <secretish>)` comparison exists in any api/ source', async () => {
     const files = await walk(apiDir);
     const violations: string[] = [];
