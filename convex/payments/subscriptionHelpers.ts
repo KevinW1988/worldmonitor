@@ -598,6 +598,8 @@ export async function handleSubscriptionActive(
       lastReconcileAttemptAt: undefined,
       reconcileFailureCount: undefined,
       reconcileNotFoundCount: undefined,
+      renewalVerificationState: undefined,
+      renewalVerificationAttemptAt: undefined,
     });
   } else {
     await ctx.db.insert("subscriptions", {
@@ -746,6 +748,8 @@ export async function handleSubscriptionRenewed(
     lastReconcileAttemptAt: undefined,
     reconcileFailureCount: undefined,
     reconcileNotFoundCount: undefined,
+    renewalVerificationState: undefined,
+    renewalVerificationAttemptAt: undefined,
   });
 
   // Recompute from ALL subs — a renewal on a lower-tier sub must NOT

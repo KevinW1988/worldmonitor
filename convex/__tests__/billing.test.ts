@@ -3694,4 +3694,148 @@ describe("payments billing missed renewal reconciliation", () => {
     expect(errorSpy).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });
+
+  describe("on-demand renewal verification", () => {
+    test("restores premium access immediately when Dodo reports a future active period", async () => {
+      const t = convexTest(schema, modules);
+      const renewedEnd = NOW + 30 * DAY_MS;
+      await seedStaleActiveForReconcile(t, { suffix: "on_demand_active" });
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_active",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "active",
+              previous_billing_date: new Date(NOW).toISOString(),
+              next_billing_date: new Date(renewedEnd).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(result).toEqual({ status: "active" });
+      expect((await readSub(t, "on_demand_active"))?.currentPeriodEnd).toBe(renewedEnd);
+      expect((await readEntitlement(t, TEST_USER_ID))?.validUntil).toBe(renewedEnd);
+    });
+
+    test("corrects an inactive remote subscription and reports a confirmed lapse", async () => {
+      const t = convexTest(schema, modules);
+      const staleEnd = NOW - DAY_MS;
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_expired",
+        currentPeriodEnd: staleEnd,
+      });
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_expired",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "expired",
+              previous_billing_date: new Date(NOW - 31 * DAY_MS).toISOString(),
+              next_billing_date: new Date(staleEnd).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(result).toEqual({ status: "subscription_lapsed" });
+      expect((await readSub(t, "on_demand_expired"))?.status).toBe("expired");
+      expect((await readEntitlement(t, TEST_USER_ID))?.planKey).toBe("free");
+    });
+
+    test("surfaces Dodo failure and throttles an immediate retry", async () => {
+      const t = convexTest(schema, modules);
+      await seedStaleActiveForReconcile(t, { suffix: "on_demand_failure" });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const first = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [],
+        },
+      );
+      const second = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW + 1_000,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_failure",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "active",
+              previous_billing_date: new Date(NOW).toISOString(),
+              next_billing_date: new Date(NOW + 30 * DAY_MS).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(first).toMatchObject({ status: "renewal_verification_failed" });
+      expect(second).toMatchObject({
+        status: "renewal_verification_failed",
+        retryAfterSeconds: expect.any(Number),
+      });
+      expect((await readSub(t, "on_demand_failure"))?.currentPeriodEnd).toBe(NOW - DAY_MS);
+      errorSpy.mockRestore();
+    });
+
+    test("atomically coalesces concurrent claims for the same stale subscription", async () => {
+      const t = convexTest(schema, modules);
+      await seedStaleActiveForReconcile(t, { suffix: "on_demand_coalesce" });
+
+      const claims = await Promise.all([
+        t.mutation(
+          internal.payments.billing.claimRecentlyStaleSubscriptionForVerification,
+          { userId: TEST_USER_ID, now: NOW },
+        ),
+        t.mutation(
+          internal.payments.billing.claimRecentlyStaleSubscriptionForVerification,
+          { userId: TEST_USER_ID, now: NOW },
+        ),
+      ]);
+
+      expect(claims.map((claim) => claim.kind).sort()).toEqual(["claimed", "pending"]);
+    });
+
+    test("does not call Dodo for an active row outside the recent-staleness window", async () => {
+      const t = convexTest(schema, modules);
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_old",
+        currentPeriodEnd: NOW - 4 * DAY_MS,
+      });
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_old",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "active",
+              previous_billing_date: new Date(NOW).toISOString(),
+              next_billing_date: new Date(NOW + 30 * DAY_MS).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(result).toEqual({ status: "subscription_lapsed" });
+      expect((await readSub(t, "on_demand_old"))?.currentPeriodEnd).toBe(NOW - 4 * DAY_MS);
+    });
+  });
 });

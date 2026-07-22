@@ -104,6 +104,24 @@ const DODO_RENEWAL_RECONCILIATION_BACKOFF_FIRST_MS = 6 * 60 * 60 * 1000;
 const DODO_RENEWAL_RECONCILIATION_BACKOFF_BASE_MS = 2 * 24 * 60 * 60 * 1000;
 const DODO_RENEWAL_RECONCILIATION_BACKOFF_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Request-path renewal verification (#4770). Only subscriptions whose paid
+// period ended in the last three days are eligible: this closes the daily-cron
+// denial window without turning every long-lapsed request into a Dodo lookup.
+const ON_DEMAND_RENEWAL_RECENT_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+// The gateway gives /api/internal-entitlements three seconds. Leave one second
+// for Convex/query/mutation overhead and disable SDK retries below.
+const ON_DEMAND_RENEWAL_TIMEOUT_MS = 2_000;
+// A durable lease coalesces simultaneous route/API-key hits across action
+// instances. It exceeds the provider timeout so a second request observes
+// `pending` while the first owns the lookup.
+const ON_DEMAND_RENEWAL_LEASE_MS = 15_000;
+// Transient failures are retryable, but no more than once per minute per
+// subscription. The response carries the remaining cooldown to callers.
+const ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS = 60_000;
+// If Dodo is reachable but still reports no covering period, avoid re-querying
+// on every route hit. Organic webhooks clear this state immediately.
+const ON_DEMAND_RENEWAL_LAPSED_COOLDOWN_MS = 5 * 60_000;
+
 function reconcileBackoffMs(failureCount: number): number {
   if (failureCount <= 0) return 0;
   if (failureCount === 1) return DODO_RENEWAL_RECONCILIATION_BACKOFF_FIRST_MS;
@@ -200,6 +218,26 @@ type StaleActiveSubscriptionsPage = {
   continueCursor: string;
   isDone: boolean;
 };
+
+type OnDemandRenewalClaim =
+  | {
+      kind: "claimed";
+      claimedAt: number;
+      subscription: StaleActiveSubscriptionForRenewalReconciliation;
+    }
+  | { kind: "pending"; retryAfterSeconds: number }
+  | { kind: "failed"; retryAfterSeconds: number }
+  | { kind: "lapsed" }
+  | { kind: "not_applicable" };
+
+type OnDemandRenewalResult =
+  | { status: "active" }
+  | { status: "subscription_lapsed" }
+  | {
+      status: "renewal_verification_pending" | "renewal_verification_failed";
+      retryAfterSeconds: number;
+    }
+  | { status: "not_applicable" };
 
 type ReconciliationSkipReason =
   | "local_missing"
@@ -613,6 +651,132 @@ export const listStaleActiveSubscriptionsForRenewalReconciliation = internalQuer
   },
 });
 
+function retryAfterSeconds(windowMs: number, elapsedMs: number): number {
+  return Math.max(1, Math.ceil((windowMs - elapsedMs) / 1000));
+}
+
+/**
+ * Atomically claims the strongest recently-stale active subscription for a
+ * user. Convex mutations serialize conflicting writes, so concurrent premium
+ * requests see one `claimed` result and the rest see the durable `pending`
+ * lease instead of each starting a Dodo request.
+ */
+export const claimRecentlyStaleSubscriptionForVerification = internalMutation({
+  args: {
+    userId: v.string(),
+    now: v.number(),
+  },
+  handler: async (ctx, args): Promise<OnDemandRenewalClaim> => {
+    const subscriptions = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    const recentCutoff = args.now - ON_DEMAND_RENEWAL_RECENT_WINDOW_MS;
+    let candidate: (typeof subscriptions)[number] | null = null;
+    for (const subscription of subscriptions) {
+      if (
+        subscription.status !== "active" ||
+        subscription.currentPeriodEnd >= args.now ||
+        subscription.currentPeriodEnd < recentCutoff
+      ) {
+        continue;
+      }
+      if (
+        candidate === null ||
+        compareEntitlementPlans(
+          { planKey: subscription.planKey, validUntil: subscription.currentPeriodEnd },
+          { planKey: candidate.planKey, validUntil: candidate.currentPeriodEnd },
+        ) > 0
+      ) {
+        candidate = subscription;
+      }
+    }
+
+    if (!candidate) {
+      // A caller with billing history but no recently-stale active row has no
+      // uncertain provider state to verify on the request path. Preserve a
+      // definitive lapse signal for corrected inactive rows and old churn.
+      return subscriptions.length > 0 ? { kind: "lapsed" } : { kind: "not_applicable" };
+    }
+
+    const attemptedAt = candidate.renewalVerificationAttemptAt;
+    if (attemptedAt != null) {
+      const elapsed = Math.max(0, args.now - attemptedAt);
+      if (
+        candidate.renewalVerificationState === "pending" &&
+        elapsed < ON_DEMAND_RENEWAL_LEASE_MS
+      ) {
+        return {
+          kind: "pending",
+          retryAfterSeconds: retryAfterSeconds(ON_DEMAND_RENEWAL_LEASE_MS, elapsed),
+        };
+      }
+      if (
+        candidate.renewalVerificationState === "failed" &&
+        elapsed < ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS
+      ) {
+        return {
+          kind: "failed",
+          retryAfterSeconds: retryAfterSeconds(ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS, elapsed),
+        };
+      }
+      if (
+        candidate.renewalVerificationState === "lapsed" &&
+        elapsed < ON_DEMAND_RENEWAL_LAPSED_COOLDOWN_MS
+      ) {
+        return { kind: "lapsed" };
+      }
+    }
+
+    await ctx.db.patch(candidate._id, {
+      renewalVerificationState: "pending",
+      renewalVerificationAttemptAt: args.now,
+    });
+    return {
+      kind: "claimed",
+      claimedAt: args.now,
+      subscription: {
+        _id: candidate._id,
+        userId: candidate.userId,
+        dodoSubscriptionId: candidate.dodoSubscriptionId,
+        currentPeriodEnd: candidate.currentPeriodEnd,
+        lastReconcileAttemptAt: candidate.lastReconcileAttemptAt,
+        reconcileFailureCount: candidate.reconcileFailureCount,
+        reconcileNotFoundCount: candidate.reconcileNotFoundCount,
+      },
+    };
+  },
+});
+
+export const finalizeRecentlyStaleSubscriptionVerification = internalMutation({
+  args: {
+    subscriptionId: v.id("subscriptions"),
+    claimedAt: v.number(),
+    status: v.union(
+      v.literal("active"),
+      v.literal("failed"),
+      v.literal("lapsed"),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.subscriptionId);
+    if (
+      !existing ||
+      existing.renewalVerificationState !== "pending" ||
+      existing.renewalVerificationAttemptAt !== args.claimedAt
+    ) {
+      return;
+    }
+    await ctx.db.patch(args.subscriptionId, args.status === "active"
+      ? {
+          renewalVerificationState: undefined,
+          renewalVerificationAttemptAt: undefined,
+        }
+      : { renewalVerificationState: args.status });
+  },
+});
+
 /**
  * Marks a reconcile attempt on a stale-active subscription row: bumps
  * `reconcileFailureCount` and stamps `lastReconcileAttemptAt` so the
@@ -767,6 +931,8 @@ export const applyDodoSubscriptionReconciliation = internalMutation({
             lastReconcileAttemptAt: undefined,
             reconcileFailureCount: undefined,
             reconcileNotFoundCount: undefined,
+            renewalVerificationState: undefined,
+            renewalVerificationAttemptAt: undefined,
           }),
       ...(args.remote.status === "cancelled"
         ? { cancelledAt: args.remote.cancelledAt ?? existing.cancelledAt ?? args.observedAt }
@@ -827,6 +993,8 @@ export const expireMissingDodoSubscription = internalMutation({
       lastReconcileAttemptAt: undefined,
       reconcileFailureCount: undefined,
       reconcileNotFoundCount: undefined,
+      renewalVerificationState: undefined,
+      renewalVerificationAttemptAt: undefined,
     });
     await recomputeEntitlementFromAllSubs(ctx, existing.userId, args.observedAt);
     return { kind: "expired" };
@@ -835,7 +1003,10 @@ export const expireMissingDodoSubscription = internalMutation({
 
 type StaleRowOutcome =
   | { kind: "reconciled" }
-  | { kind: "skipped" }
+  | {
+      kind: "skipped";
+      reason: ReconciliationSkipReason | "remote_status_unusable";
+    }
   | { kind: "failed"; error: string }
   // Confirmed terminal not-found (definitive 404 past the confirmation
   // threshold). The row is NOT downgraded here — the action loop decides,
@@ -915,7 +1086,7 @@ async function reconcileOneStaleRow(
       );
       // Row is still stale-active — back it off (not a 404, resets the streak).
       await safeMarkReconcileAttempt(ctx, sub._id, now, false);
-      return { kind: "skipped" };
+      return { kind: "skipped", reason: "remote_status_unusable" };
     }
 
     const result = (await ctx.runMutation(
@@ -928,7 +1099,9 @@ async function reconcileOneStaleRow(
       },
     )) as ReconciliationMutationResult;
     // `apply` records its own backoff for the still-stale skip reasons.
-    return result.kind === "reconciled" ? { kind: "reconciled" } : { kind: "skipped" };
+    return result.kind === "reconciled"
+      ? { kind: "reconciled" }
+      : { kind: "skipped", reason: result.reason };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const notFound = isDefinitiveDodoNotFound(err);
@@ -957,6 +1130,139 @@ async function reconcileOneStaleRow(
     return { kind: "failed", error: message };
   }
 }
+
+async function finalizeOnDemandRenewalVerification(
+  ctx: Pick<ActionCtx, "runMutation">,
+  claim: Extract<OnDemandRenewalClaim, { kind: "claimed" }>,
+  status: "active" | "failed" | "lapsed",
+): Promise<void> {
+  await ctx.runMutation(
+    internal.payments.billing.finalizeRecentlyStaleSubscriptionVerification,
+    {
+      subscriptionId: claim.subscription._id,
+      claimedAt: claim.claimedAt,
+      status,
+    },
+  );
+}
+
+/**
+ * Bounded request-path rescue for a recently expired local entitlement.
+ * Reuses the cron's provider normalization + race-safe apply mutation, while a
+ * durable claim prevents concurrent premium requests from fanning out to Dodo.
+ */
+export const verifyRecentlyStaleSubscriptionOnDemand = internalAction({
+  args: {
+    userId: v.string(),
+    now: v.optional(v.number()),
+    remoteSubscriptionsForTest: v.optional(
+      v.array(dodoReconciliationRemoteSubscriptionValidator),
+    ),
+    errorInjectionForTest: v.optional(
+      v.record(
+        v.string(),
+        v.union(v.literal("not_found"), v.literal("server_error")),
+      ),
+    ),
+  },
+  handler: async (ctx, args): Promise<OnDemandRenewalResult> => {
+    const usesTestInjection =
+      args.remoteSubscriptionsForTest !== undefined ||
+      args.errorInjectionForTest !== undefined;
+    if (usesTestInjection && process.env.NODE_ENV !== "test") {
+      throw new Error(
+        "[billing/on-demand-renewal] test injection args are only allowed under test",
+      );
+    }
+
+    const now = args.now ?? Date.now();
+    const claim = (await ctx.runMutation(
+      internal.payments.billing.claimRecentlyStaleSubscriptionForVerification,
+      { userId: args.userId, now },
+    )) as OnDemandRenewalClaim;
+
+    switch (claim.kind) {
+      case "pending":
+        return {
+          status: "renewal_verification_pending",
+          retryAfterSeconds: claim.retryAfterSeconds,
+        };
+      case "failed":
+        return {
+          status: "renewal_verification_failed",
+          retryAfterSeconds: claim.retryAfterSeconds,
+        };
+      case "lapsed":
+        return { status: "subscription_lapsed" };
+      case "not_applicable":
+        return { status: "not_applicable" };
+      case "claimed":
+        break;
+    }
+
+    const remoteById = new Map(
+      (args.remoteSubscriptionsForTest ?? []).map((remote) => [
+        remote.subscription_id,
+        remote,
+      ]),
+    );
+    const errorInjection = new Map<string, "not_found" | "server_error">(
+      Object.entries(args.errorInjectionForTest ?? {}),
+    );
+
+    let outcome: StaleRowOutcome;
+    try {
+      const client = usesTestInjection
+        ? null
+        : getDodoClient({ timeout: ON_DEMAND_RENEWAL_TIMEOUT_MS, maxRetries: 0 });
+      outcome = await reconcileOneStaleRow(ctx, claim.subscription, {
+        now,
+        useTestRemotes: usesTestInjection,
+        remoteById,
+        errorInjection,
+        client,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // sentry-coverage-ok: Convex auto-Sentry captures console.error. Do not
+      // include provider response bodies or secrets in this customer-path log.
+      console.error(
+        `[billing/on-demand-renewal] Failed before Dodo verification dodoSubscriptionId=${claim.subscription.dodoSubscriptionId} userId=${claim.subscription.userId}: ${message}`,
+      );
+      await finalizeOnDemandRenewalVerification(ctx, claim, "failed");
+      return {
+        status: "renewal_verification_failed",
+        retryAfterSeconds: Math.ceil(ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS / 1000),
+      };
+    }
+
+    if (
+      outcome.kind === "failed" ||
+      outcome.kind === "terminal_not_found" ||
+      (outcome.kind === "skipped" &&
+        (outcome.reason === "remote_status_unusable" ||
+          outcome.reason === "local_updated_concurrently"))
+    ) {
+      await finalizeOnDemandRenewalVerification(ctx, claim, "failed");
+      return {
+        status: "renewal_verification_failed",
+        retryAfterSeconds: Math.ceil(ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS / 1000),
+      };
+    }
+
+    const entitlement = await ctx.runQuery(
+      internal.entitlements.getEntitlementsByUserId,
+      { userId: args.userId },
+    );
+    if (entitlement.features.tier > 0 && entitlement.validUntil >= now) {
+      await finalizeOnDemandRenewalVerification(ctx, claim, "active");
+      return { status: "active" };
+    }
+
+    await finalizeOnDemandRenewalVerification(ctx, claim, "lapsed");
+    return { status: "subscription_lapsed" };
+  },
+});
 
 export const reconcileMissedDodoRenewals = internalAction({
   args: {
