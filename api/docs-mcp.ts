@@ -212,6 +212,9 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const ip = getClientIp(req);
+  // Redis-degraded scoped limits intentionally stay availability-first — the
+  // upstream docs MCP is fully public and cheap, so degradation (logged by
+  // checkScopedRateLimit) must not take the docs surface down.
   const scoped = await checkScopedRateLimit(RATE_LIMIT_SCOPE, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW, ip);
   if (!scoped.allowed) {
     const retryAfter = Math.max(1, Math.ceil((scoped.reset - Date.now()) / 1000));
