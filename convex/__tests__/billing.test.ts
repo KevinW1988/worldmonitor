@@ -4278,7 +4278,12 @@ describe("payments billing missed renewal reconciliation", () => {
         expect(jobs[0].name).not.toContain("resync");
         expect(jobs[1].name).toContain("resyncEntitlementCacheFromDb");
         expect(jobs[1].args).toEqual([{ userId: TEST_USER_ID }]);
-        expect(jobs[1].scheduledTime - jobs[0].scheduledTime).toBe(15_000);
+        // Each runAfter stamps its own Date.now() (not faked), so the two
+        // calls can straddle a millisecond tick — assert the delay with a
+        // small tolerance instead of exact equality.
+        const delta = jobs[1].scheduledTime - jobs[0].scheduledTime;
+        expect(delta).toBeGreaterThanOrEqual(15_000);
+        expect(delta).toBeLessThan(15_100);
       } finally {
         vi.useRealTimers();
         vi.unstubAllEnvs();
