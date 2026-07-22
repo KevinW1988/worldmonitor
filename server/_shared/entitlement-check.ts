@@ -17,6 +17,14 @@ import { getCachedJson, setCachedJson } from './redis';
 // Types
 // ---------------------------------------------------------------------------
 
+// Single source of truth for the billing-verification status union — imported
+// by api/mcp/types.ts, api/mcp/auth.ts, and api/mcp/billing-denial.ts so the
+// four surfaces cannot silently drift when a status is added.
+export type BillingVerificationStatus =
+  | 'subscription_lapsed'
+  | 'renewal_verification_pending'
+  | 'renewal_verification_failed';
+
 export interface CachedEntitlements {
   planKey: string;
   features: {
@@ -45,10 +53,7 @@ export interface CachedEntitlements {
     apiDailyAllowance?: number;
   };
   validUntil: number;
-  billingStatus?:
-    | 'subscription_lapsed'
-    | 'renewal_verification_pending'
-    | 'renewal_verification_failed';
+  billingStatus?: BillingVerificationStatus;
   retryAfterSeconds?: number;
   renewalVerificationFreshness?: {
     status: 'not_applicable';
@@ -141,10 +146,11 @@ const LAPSED_BILLING_MARKER_TTL_SECONDS = 60;
 // No-billing-history is structurally invariant while tier stays 0, and every
 // tier-changing write path unconditionally overwrites this cache key via
 // syncEntitlementCache — so a longer marker cannot delay a new subscription
-// from taking effect. 300s keeps the never-subscribed cohort (the bulk of
-// tier-0 traffic) off the action/claim path instead of re-running it every
-// minute.
-const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 300;
+// from taking effect (invariant re-audited in the fresh review round). Full
+// 900s restores pre-#4770 cache economics for the never-subscribed cohort,
+// the bulk of tier-0 traffic; short/dynamic TTLs stay reserved for the
+// genuinely uncertain lapsed/pending/failed states.
+const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 900;
 
 /**
  * True when the Convex entitlement backend is reachable in principle. Callers

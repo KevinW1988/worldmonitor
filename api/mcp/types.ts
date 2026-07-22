@@ -2,6 +2,8 @@
 // Pure types only — no runtime exports — so this module is safe to import
 // from anywhere without creating evaluation-order surprises or cycles.
 
+import type { BillingVerificationStatus } from '../../server/_shared/entitlement-check';
+
 // ---------------------------------------------------------------------------
 // Auth-context shape passed into tool _execute. U7 widened the previous
 // `apiKey: string` to a discriminated union so per-tool fetches can branch
@@ -239,10 +241,7 @@ export interface McpHandlerDeps {
     planKey?: string;
     features: { tier: number; mcpAccess?: boolean };
     validUntil: number;
-    billingStatus?:
-      | 'subscription_lapsed'
-      | 'renewal_verification_pending'
-      | 'renewal_verification_failed';
+    billingStatus?: BillingVerificationStatus;
     retryAfterSeconds?: number;
   } | null>;
   // #4859: Convex userApiKeys hash lookup (same shared helper as the REST

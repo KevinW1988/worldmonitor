@@ -5,10 +5,9 @@
 // agent loses the retry/billing signal for exactly the window the on-demand
 // renewal verification exists to cover.
 
-export type BillingVerificationCode =
-  | 'subscription_lapsed'
-  | 'renewal_verification_pending'
-  | 'renewal_verification_failed';
+import type { BillingVerificationStatus } from '../../server/_shared/entitlement-check';
+
+export type BillingVerificationCode = BillingVerificationStatus;
 
 const BILLING_VERIFICATION_CODES: ReadonlySet<string> = new Set([
   'subscription_lapsed',
@@ -55,7 +54,10 @@ export function throwIfBillingDenial(response: ToolFetchResponse, label: string)
   if (response.ok) return;
   const marker = response.headers?.get('X-Billing-Verification');
   if (!marker || !BILLING_VERIFICATION_CODES.has(marker)) return;
-  const rawRetryAfter = Number(response.headers?.get('Retry-After'));
+  // Distinguish a missing header from a present-but-zero value: Number(null)
+  // is 0 (finite), which would silently masquerade as an explicit 0s hint.
+  const retryHeader = response.headers?.get('Retry-After');
+  const rawRetryAfter = retryHeader == null ? Number.NaN : Number(retryHeader);
   throw new BillingDenialError(
     label,
     response.status,

@@ -4190,12 +4190,72 @@ describe("payments billing missed renewal reconciliation", () => {
       expect((await readSub(t, "on_demand_lapsed_cooldown"))?.currentPeriodEnd).toBe(NOW - DAY_MS);
       expect((await readSub(t, "on_demand_lapsed_cooldown"))?.renewalVerificationState).toBe("lapsed");
     });
+
+    test("finalize is a no-op when a newer claim superseded the caller's lease", async () => {
+      const t = convexTest(schema, modules);
+      const subId = await seedStaleActiveForReconcile(t, { suffix: "on_demand_stale_finalize" });
+      const claim = await t.mutation(
+        internal.payments.billing.claimRecentlyStaleSubscriptionForVerification,
+        { userId: TEST_USER_ID, now: NOW },
+      );
+      expect(claim.kind).toBe("claimed");
+
+      // A newer claim supersedes the original lease (fresh attempt timestamp);
+      // the original owner's finalize must not clobber it.
+      await t.run(async (ctx) => {
+        await ctx.db.patch(subId, { renewalVerificationAttemptAt: NOW + 20_000 });
+      });
+      await t.mutation(
+        internal.payments.billing.finalizeRecentlyStaleSubscriptionVerification,
+        { subscriptionId: subId, claimedAt: NOW, status: "lapsed" },
+      );
+
+      const row = await readSub(t, "on_demand_stale_finalize");
+      expect(row?.renewalVerificationState).toBe("pending");
+      expect(row?.renewalVerificationAttemptAt).toBe(NOW + 20_000);
+    });
+
+    test("an unusable remote status maps to a retryable verification failure", async () => {
+      const t = convexTest(schema, modules);
+      await seedStaleActiveForReconcile(t, { suffix: "on_demand_unusable" });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_unusable",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "pending",
+              previous_billing_date: new Date(NOW - 31 * DAY_MS).toISOString(),
+              next_billing_date: new Date(NOW - DAY_MS).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(result).toEqual({
+        status: "renewal_verification_failed",
+        retryAfterSeconds: 60,
+      });
+      expect((await readSub(t, "on_demand_unusable"))?.renewalVerificationState).toBe("failed");
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
   });
 
   describe("entitlement cache re-sync (#4770 marker race)", () => {
-    test("schedules an immediate and a delayed cache sync when Redis is configured", async () => {
+    test("schedules an immediate snapshot sync and a delayed from-DB re-sync", async () => {
       const t = convexTest(schema, modules);
       vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://upstash.test");
+      // Freeze timers so the enqueued jobs are inspectable but never execute —
+      // convex-test runs a 0-delay scheduled action after the transaction
+      // closes, which trips its "Write outside of transaction" guard.
+      vi.useFakeTimers({ toFake: ["setTimeout", "setInterval"] });
       try {
         await t.run(async (ctx) => {
           await upsertEntitlements(ctx, TEST_USER_ID, "pro_monthly", NOW + 30 * DAY_MS, NOW);
@@ -4204,17 +4264,75 @@ describe("payments billing missed renewal reconciliation", () => {
         const scheduled = await t.run((ctx) =>
           ctx.db.system.query("_scheduled_functions").collect(),
         );
-        const syncs = scheduled
-          .filter((job) => job.name.includes("syncEntitlementCache"))
+        const jobs = scheduled
+          .filter((job) => job.name.includes("cacheActions"))
           .sort((a, b) => a.scheduledTime - b.scheduledTime);
 
         // The delayed second sync overwrites any stale billing-denial marker a
         // still-in-flight request writes AFTER the immediate sync (bare SET,
-        // last-writer-wins) — without it a just-renewed user can be re-denied
-        // until the marker TTL expires.
-        expect(syncs).toHaveLength(2);
-        expect(syncs[1].scheduledTime - syncs[0].scheduledTime).toBe(15_000);
+        // last-writer-wins). It must be the from-DB variant: replaying this
+        // upsert's snapshot could revert a NEWER entitlement write landing
+        // inside the delay (a stale re-grant).
+        expect(jobs).toHaveLength(2);
+        expect(jobs[0].name).toContain("syncEntitlementCache");
+        expect(jobs[0].name).not.toContain("resync");
+        expect(jobs[1].name).toContain("resyncEntitlementCacheFromDb");
+        expect(jobs[1].args).toEqual([{ userId: TEST_USER_ID }]);
+        expect(jobs[1].scheduledTime - jobs[0].scheduledTime).toBe(15_000);
       } finally {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      }
+    });
+
+    test("delayed re-sync writes CURRENT entitlement state, not a caller snapshot", async () => {
+      const t = convexTest(schema, modules);
+      vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://upstash.test");
+      vi.stubEnv("UPSTASH_REDIS_REST_TOKEN", "token-test");
+      const setCalls: string[] = [];
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        setCalls.push(String(input));
+        return new Response(JSON.stringify({ result: "OK" }), { status: 200 });
+      });
+      try {
+        await t.run(async (ctx) => {
+          await ctx.db.insert("entitlements", {
+            userId: TEST_USER_ID,
+            planKey: "pro_monthly",
+            features: getFeaturesForPlan("pro_monthly"),
+            validUntil: NOW + 30 * DAY_MS,
+            updatedAt: NOW,
+          });
+        });
+        await t.action(internal.payments.cacheActions.resyncEntitlementCacheFromDb, {
+          userId: TEST_USER_ID,
+        });
+        expect(setCalls).toHaveLength(1);
+        expect(setCalls[0]).toContain(encodeURIComponent('"planKey":"pro_monthly"'));
+
+        // A downgrade landing before the delayed job fires must be what the
+        // re-sync writes — the action reads at fire time by construction.
+        await t.run(async (ctx) => {
+          const row = await ctx.db
+            .query("entitlements")
+            .withIndex("by_userId", (q) => q.eq("userId", TEST_USER_ID))
+            .first();
+          if (row) {
+            await ctx.db.patch(row._id, {
+              planKey: "free",
+              features: getFeaturesForPlan("free"),
+              validUntil: 0,
+              updatedAt: NOW + 1,
+            });
+          }
+        });
+        await t.action(internal.payments.cacheActions.resyncEntitlementCacheFromDb, {
+          userId: TEST_USER_ID,
+        });
+        expect(setCalls).toHaveLength(2);
+        expect(setCalls[1]).toContain(encodeURIComponent('"planKey":"free"'));
+      } finally {
+        fetchSpy.mockRestore();
         vi.unstubAllEnvs();
       }
     });

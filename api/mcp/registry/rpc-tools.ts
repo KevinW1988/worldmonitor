@@ -4,7 +4,7 @@ import MINING_SITES_RAW from '../../../shared/mining-sites.js';
 // @ts-expect-error — JS module, no declaration file
 import { readJsonFromUpstash } from '../../_upstash-json.js';
 import { buildAuthHeaders } from '../auth';
-import { assertToolFetchOk, throwIfBillingDenial } from '../billing-denial';
+import { assertToolFetchOk, BillingDenialError, throwIfBillingDenial } from '../billing-denial';
 import { SUPPORTED_CONSUMER_PRICES_COUNTRIES } from '../constants';
 import { evaluateFreshness } from '../freshness';
 import type { FreshnessCheck, ToolDef } from '../types';
@@ -755,12 +755,28 @@ export const RPC_TOOLS: ToolDef[] = [
         type === 'military' || !civAuth
           ? Promise.resolve(null)
           : fetch(civUrl, { headers: { ...civAuth, 'User-Agent': UA }, signal: AbortSignal.timeout(8_000) })
-              .then(r => r.ok ? r.json() as Promise<CivilianResp> : Promise.reject(new Error(`HTTP ${r.status}`))),
+              .then(r => {
+                throwIfBillingDenial(r, 'get-airspace-civilian');
+                return r.ok ? r.json() as Promise<CivilianResp> : Promise.reject(new Error(`HTTP ${r.status}`));
+              }),
         type === 'civilian' || !milAuth
           ? Promise.resolve(null)
           : fetch(milUrl, { headers: { ...milAuth, 'User-Agent': UA }, signal: AbortSignal.timeout(8_000) })
-              .then(r => r.ok ? r.json() as Promise<MilResp> : Promise.reject(new Error(`HTTP ${r.status}`))),
+              .then(r => {
+                throwIfBillingDenial(r, 'get-airspace-military');
+                return r.ok ? r.json() as Promise<MilResp> : Promise.reject(new Error(`HTTP ${r.status}`));
+              }),
       ]);
+
+      // A billing denial is user-level, not a data-source outage: never serve
+      // partial data or a generic both-failed error over it — rethrow so
+      // dispatch re-emits the full billing contract (status, Retry-After,
+      // X-Billing-Verification, data.code).
+      for (const result of [civResult, milResult]) {
+        if (result.status === 'rejected' && result.reason instanceof BillingDenialError) {
+          throw result.reason;
+        }
+      }
 
       const civOk = type === 'military' || civResult.status === 'fulfilled';
       const milOk = type === 'civilian' || milResult.status === 'fulfilled';

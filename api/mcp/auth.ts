@@ -13,6 +13,7 @@ import { redisPipeline as rawRedisPipeline } from '../_upstash-json.js';
 import {
   getBillingVerificationDenial,
   getEntitlements,
+  type BillingVerificationStatus,
 } from '../../server/_shared/entitlement-check';
 import {
   buildInternalMcpHeaders,
@@ -156,10 +157,7 @@ export function wwwAuthHeader(resourceMetadataUrl: string, errorParam = ''): str
 
 export function getMcpBillingVerificationDenial(
   entitlements: {
-    billingStatus?:
-      | 'subscription_lapsed'
-      | 'renewal_verification_pending'
-      | 'renewal_verification_failed';
+    billingStatus?: BillingVerificationStatus;
     retryAfterSeconds?: number;
   } | null | undefined,
   corsHeaders: Record<string, string>,

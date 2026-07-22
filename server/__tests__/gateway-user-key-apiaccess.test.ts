@@ -75,13 +75,17 @@ const requiredTiers = new Map<string, number>();
 const entitlementsByUser = new Map<string, Ent>();
 const getEntitlements = vi.fn(async (userId: string) => entitlementsByUser.get(userId) ?? entitlement);
 let entitlementBackendConfigured = true;
+const checkEntitlementDetailedMock = vi.fn(
+  async (): Promise<{ response: Response | null; entitlements: unknown }> =>
+    ({ response: null, entitlements: null }),
+);
 vi.mock("../_shared/entitlement-check", async (importActual) => {
   const actual = await importActual<typeof import("../_shared/entitlement-check")>();
   return {
     ...actual,
     getRequiredTier: (pathname: string) => requiredTiers.get(pathname) ?? null,
     checkEntitlement: vi.fn().mockResolvedValue(null),
-    checkEntitlementDetailed: vi.fn().mockResolvedValue({ response: null, entitlements: null }),
+    checkEntitlementDetailed: (...a: unknown[]) => checkEntitlementDetailedMock(...(a as [])),
     getEntitlements: (...a: unknown[]) => getEntitlements(...a),
     isEntitlementBackendConfigured: () => entitlementBackendConfigured,
   };
@@ -159,6 +163,7 @@ beforeEach(() => {
   resolveClerkSession.mockClear();
   validateBearerToken.mockClear();
   entitlementBackendConfigured = true;
+  checkEntitlementDetailedMock.mockReset().mockResolvedValue({ response: null, entitlements: null });
   validateUserApiKey.mockClear().mockResolvedValue({ userId: "acct_lapsed", keyId: "k1", name: "t" });
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -286,9 +291,36 @@ describe("#4611 — expired wm_ key rejected on all route classes", () => {
     expect(res.status).toBe(503);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(res.headers.get("Retry-After")).toBe("5");
+    expect(res.headers.get("X-Billing-Verification")).toBe("entitlement_verification_unavailable");
     expect(await res.json()).toMatchObject({ code: "entitlement_verification_unavailable" });
     expect(checkBurst).not.toHaveBeenCalled();
     expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  test("tier-gated route passes through a billing-verification 503 from checkEntitlementDetailed", async () => {
+    entitlement = ACTIVE;
+    checkEntitlementDetailedMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({ error: "Renewal verification pending", code: "renewal_verification_pending" }),
+        {
+          status: 503,
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+            "Retry-After": "17",
+            "X-Billing-Verification": "renewal_verification_pending",
+          },
+        },
+      ),
+      entitlements: null,
+    });
+
+    const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("17");
+    expect(res.headers.get("X-Billing-Verification")).toBe("renewal_verification_pending");
+    expect(await res.json()).toMatchObject({ code: "renewal_verification_pending" });
   });
 
   test("null entitlement with UNCONFIGURED backend → fail-open 200 (deploy defect, not billing state)", async () => {

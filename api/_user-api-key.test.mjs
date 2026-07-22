@@ -439,14 +439,14 @@ test('expired not-applicable freshness marker falls through to Convex', async ()
         features: { apiAccess: false },
         renewalVerificationFreshness: {
           status: 'not_applicable',
-          checkedAt: Date.now() - 300_001,
+          checkedAt: Date.now() - 900_001,
         },
       },
     },
   });
 });
 
-test('not-applicable freshness marker is cached for at most 300 seconds', async () => {
+test('not-applicable freshness marker is cached for at most 900 seconds', async () => {
   await withMockedConvex(async (calls) => {
     const result = await validateBootstrapUserApiAccess('user_api_owner');
 
@@ -460,7 +460,7 @@ test('not-applicable freshness marker is cached for at most 300 seconds', async 
     assert.ok(cacheWrite);
     const setCommand = JSON.parse(cacheWrite.body).find((entry) => entry[0] === 'SET');
     const ttl = Number(setCommand[4]);
-    assert.ok(ttl > 0 && ttl <= 300, `unexpected marker TTL: ${ttl}`);
+    assert.ok(ttl > 0 && ttl <= 900, `unexpected marker TTL: ${ttl}`);
   }, {
     entitlementResponse: {
       planKey: 'free',

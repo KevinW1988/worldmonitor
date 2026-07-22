@@ -2424,6 +2424,66 @@ describe('api/mcp.ts — PRO MCP Server', () => {
     assert.equal(body.error?.code, -32603, 'total outage must return -32603');
   });
 
+  it('get_airspace surfaces a mid-call billing denial instead of a generic failure', async () => {
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ error: 'Renewal verification pending', code: 'renewal_verification_pending' }),
+      {
+        status: 503,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+          'Retry-After': '21',
+          'X-Billing-Verification': 'renewal_verification_pending',
+        },
+      },
+    );
+
+    const res = await handler(makeReq('POST', {
+      jsonrpc: '2.0', id: 15, method: 'tools/call',
+      params: { name: 'get_airspace', arguments: { country_code: 'GB' } },
+    }));
+
+    assert.equal(res.status, 503);
+    assert.equal(res.headers.get('Retry-After'), '21');
+    assert.equal(res.headers.get('X-Billing-Verification'), 'renewal_verification_pending');
+    const body = await res.json();
+    assert.equal(body.error?.code, -32603);
+    assert.equal(body.error?.data?.code, 'renewal_verification_pending');
+  });
+
+  it('get_airspace type=civilian rethrows a billing denial instead of serving partial data', async () => {
+    globalThis.fetch = async (url) => {
+      const u = url.toString();
+      if (u.includes('/api/aviation/v1/track-aircraft')) {
+        return new Response(
+          JSON.stringify({ error: 'Subscription lapsed', code: 'subscription_lapsed' }),
+          {
+            status: 403,
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-store',
+              'X-Billing-Verification': 'subscription_lapsed',
+            },
+          },
+        );
+      }
+      return originalFetch(url);
+    };
+
+    const res = await handler(makeReq('POST', {
+      jsonrpc: '2.0', id: 16, method: 'tools/call',
+      params: { name: 'get_airspace', arguments: { country_code: 'DE', type: 'civilian' } },
+    }));
+
+    // Pre-fix behavior was a plausible-looking 200 with partial:true — a
+    // billing lapse masked as a data-source outage.
+    assert.equal(res.status, 403);
+    assert.equal(res.headers.get('X-Billing-Verification'), 'subscription_lapsed');
+    const body = await res.json();
+    assert.equal(body.error?.code, -32002);
+    assert.equal(body.error?.data?.code, 'subscription_lapsed');
+  });
+
   it('get_airspace type=civilian skips military fetch', async () => {
     let militaryFetched = false;
     globalThis.fetch = async (url) => {

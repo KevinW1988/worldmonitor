@@ -219,7 +219,7 @@ describe("gateway entitlement check", () => {
       validUntil: 0,
       renewalVerificationFreshness: {
         status: "not_applicable",
-        checkedAt: Date.now() - 300_001,
+        checkedAt: Date.now() - 900_001,
       },
     });
     const originalSiteUrl = process.env.CONVEX_SITE_URL;
@@ -251,7 +251,7 @@ describe("gateway entitlement check", () => {
     }
   });
 
-  test("caches a not-applicable freshness marker for at most 300 seconds", async () => {
+  test("caches a not-applicable freshness marker for at most 900 seconds", async () => {
     const marker = {
       ...makeEntitlements(0),
       validUntil: 0,
@@ -266,7 +266,7 @@ describe("gateway entitlement check", () => {
 
     const ttl = vi.mocked(setCachedJson).mock.calls.at(-1)?.[2];
     expect(ttl).toBeGreaterThan(0);
-    expect(ttl).toBeLessThanOrEqual(300);
+    expect(ttl).toBeLessThanOrEqual(900);
   });
 
   test("checkEntitlement accepts Clerk role=pro for tier-1 gates without Convex entitlements", async () => {

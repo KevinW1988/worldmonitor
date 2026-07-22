@@ -1244,6 +1244,7 @@ export function createDomainGateway(
                 'Content-Type': 'application/json',
                 'Cache-Control': 'no-store',
                 'Retry-After': '5',
+                'X-Billing-Verification': 'entitlement_verification_unavailable',
               },
             },
           );
