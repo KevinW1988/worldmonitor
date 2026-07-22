@@ -13,7 +13,6 @@ import { redisPipeline as rawRedisPipeline } from '../_upstash-json.js';
 import {
   getBillingVerificationDenial,
   getEntitlements,
-  type CachedEntitlements,
 } from '../../server/_shared/entitlement-check';
 import {
   buildInternalMcpHeaders,
@@ -160,13 +159,9 @@ function getMcpBillingVerificationDenial(
   corsHeaders: Record<string, string>,
 ): Response | null {
   // The shared helper owns status, retry normalization, no-store, and billing
-  // headers. McpHandlerDeps intentionally exposes only the entitlement fields
-  // this edge needs, while the helper's wider CachedEntitlements contract is
-  // what the production dependency returns.
-  const denial = getBillingVerificationDenial(
-    entitlements as CachedEntitlements | null,
-    corsHeaders,
-  );
+  // headers. Its parameter asks only for the billing fields, so the narrower
+  // McpHandlerDeps entitlement shape is directly assignable.
+  const denial = getBillingVerificationDenial(entitlements, corsHeaders);
   const billingStatus = entitlements?.billingStatus;
   if (!denial || !billingStatus) return null;
 

@@ -261,6 +261,13 @@ function hasCurrentApiAccess(value) {
   return Boolean(value.features?.apiAccess === true && Number.isFinite(validUntil) && validUntil >= Date.now());
 }
 
+function clampRetryAfterSeconds(rawRetryAfter) {
+  const parsed = Number(rawRetryAfter);
+  return Number.isFinite(parsed)
+    ? Math.max(1, Math.min(60, Math.ceil(parsed)))
+    : VALIDATION_RETRY_AFTER_SECONDS;
+}
+
 function billingVerificationFailure(value) {
   const status = value?.billingStatus;
   if (status === 'subscription_lapsed') {
@@ -276,10 +283,7 @@ function billingVerificationFailure(value) {
     return null;
   }
 
-  const rawRetryAfter = Number(value?.retryAfterSeconds);
-  const retryAfter = Number.isFinite(rawRetryAfter)
-    ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter)))
-    : VALIDATION_RETRY_AFTER_SECONDS;
+  const retryAfter = clampRetryAfterSeconds(value?.retryAfterSeconds);
   return {
     ok: false,
     status: 503,
@@ -314,10 +318,7 @@ function entitlementCacheTtlSeconds(value) {
   const status = value?.billingStatus;
   if (status === 'subscription_lapsed') return 300;
   if (status === 'renewal_verification_pending' || status === 'renewal_verification_failed') {
-    const rawRetryAfter = Number(value?.retryAfterSeconds);
-    return Number.isFinite(rawRetryAfter)
-      ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter)))
-      : VALIDATION_RETRY_AFTER_SECONDS;
+    return clampRetryAfterSeconds(value?.retryAfterSeconds);
   }
   const notApplicableTtl = notApplicableVerificationTtlSeconds(value);
   return notApplicableTtl ?? ENTITLEMENT_CACHE_TTL_SECONDS;

@@ -730,6 +730,21 @@ export function createDomainGateway(
     // volume signal Phase-2 pricing reuses isn't double-counted. Overrides only
     // a successful terminal reason (status < 400); a real 4xx/5xx outcome wins.
     let pendingShadowReason: RequestReason | null = null;
+    // Shared emit+return for the three billing-verification denial sites below
+    // (internal-MCP re-check, wm_ key, legacy bearer).
+    function denyForBillingVerification(
+      ent: CachedEntitlements | null | undefined,
+      cors: Record<string, string>,
+    ): Response | null {
+      const billingDenial = getBillingVerificationDenial(ent, cors);
+      if (!billingDenial) return null;
+      emitRequest(
+        billingDenial.status,
+        billingDenial.status === 503 ? 'billing_verification_503' : 'tier_403',
+        null,
+      );
+      return billingDenial;
+    }
     function emitRequest(status: number, reason: RequestReason, cacheTier: UsageCacheTier | null, resBytes = 0): void {
       if (!ctx?.waitUntil) return;
       const effectiveReason: RequestReason =
@@ -1021,15 +1036,8 @@ export function createDomainGateway(
       // re-check via the fallback path. Mirror the per-handler runProPreChecks
       // and authorize-pro entitlement guards.
       const ent = await getEntitlements(verified.userId);
-      const billingDenial = getBillingVerificationDenial(ent, corsHeaders);
-      if (billingDenial) {
-        emitRequest(
-          billingDenial.status,
-          billingDenial.status === 503 ? 'billing_verification_503' : 'tier_403',
-          null,
-        );
-        return billingDenial;
-      }
+      const billingDenial = denyForBillingVerification(ent, corsHeaders);
+      if (billingDenial) return billingDenial;
       if (
         !ent ||
         ent.features.tier < 1 ||
@@ -1210,15 +1218,8 @@ export function createDomainGateway(
     if (isUserApiKey && sessionUserId) {
       userKeyEntitlement = await getEntitlements(sessionUserId);
       recordUsageEntitlement(userKeyEntitlement);
-      const billingDenial = getBillingVerificationDenial(userKeyEntitlement, corsHeaders);
-      if (billingDenial) {
-        emitRequest(
-          billingDenial.status,
-          billingDenial.status === 503 ? 'billing_verification_503' : 'tier_403',
-          null,
-        );
-        return billingDenial;
-      }
+      const billingDenial = denyForBillingVerification(userKeyEntitlement, corsHeaders);
+      if (billingDenial) return billingDenial;
       // A validated wm_ key proves key ownership, not current paid access.
       // getEntitlements() returns null for a missing row and for bounded
       // verification failures/timeouts, so allowing null would turn a billing
@@ -1293,15 +1294,8 @@ export function createDomainGateway(
           if (!allowed && session.userId) {
             const ent = await getEntitlements(session.userId);
             recordUsageEntitlement(ent);
-            const billingDenial = getBillingVerificationDenial(ent, corsHeaders);
-            if (billingDenial) {
-              emitRequest(
-                billingDenial.status,
-                billingDenial.status === 503 ? 'billing_verification_503' : 'tier_403',
-                null,
-              );
-              return billingDenial;
-            }
+            const billingDenial = denyForBillingVerification(ent, corsHeaders);
+            if (billingDenial) return billingDenial;
             allowed = !!ent && ent.features.tier >= 1 && ent.validUntil >= Date.now();
           }
           if (!allowed) {

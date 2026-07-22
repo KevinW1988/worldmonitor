@@ -134,6 +134,12 @@ const ENTITLEMENT_CACHE_TTL_SECONDS = 900;
 const LAPSED_BILLING_MARKER_TTL_SECONDS = 300;
 const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 60;
 
+function clampRetryAfterSeconds(raw: number | undefined): number {
+  return Number.isFinite(raw)
+    ? Math.max(1, Math.min(60, Math.ceil(raw!)))
+    : 5;
+}
+
 function isBillingVerificationStatus(
   value: unknown,
 ): value is NonNullable<CachedEntitlements['billingStatus']> {
@@ -147,10 +153,7 @@ function billingMarkerTtlSeconds(entitlements: CachedEntitlements): number | nul
   if (entitlements.billingStatus === 'subscription_lapsed') {
     return LAPSED_BILLING_MARKER_TTL_SECONDS;
   }
-  const retryAfter = entitlements.retryAfterSeconds;
-  return Number.isFinite(retryAfter)
-    ? Math.max(1, Math.min(60, Math.ceil(retryAfter!)))
-    : 5;
+  return clampRetryAfterSeconds(entitlements.retryAfterSeconds);
 }
 
 function notApplicableVerificationTtlSeconds(
@@ -304,7 +307,7 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
  * provider outage is never flattened into a misleading "upgrade required".
  */
 export function getBillingVerificationDenial(
-  entitlements: CachedEntitlements | null | undefined,
+  entitlements: Pick<CachedEntitlements, 'billingStatus' | 'retryAfterSeconds'> | null | undefined,
   corsHeaders: Record<string, string>,
   requiredTier?: number,
 ): Response | null {
@@ -330,10 +333,7 @@ export function getBillingVerificationDenial(
     );
   }
 
-  const rawRetryAfter = entitlements?.retryAfterSeconds;
-  const retryAfter = Number.isFinite(rawRetryAfter)
-    ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter!)))
-    : 5;
+  const retryAfter = clampRetryAfterSeconds(entitlements?.retryAfterSeconds);
   return new Response(
     JSON.stringify({
       error: status === 'renewal_verification_pending'

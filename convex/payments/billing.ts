@@ -10,7 +10,7 @@
  */
 
 import { ConvexError, v } from "convex/values";
-import { action, mutation, query, internalAction, internalMutation, internalQuery, type ActionCtx } from "../_generated/server";
+import { action, mutation, query, internalAction, internalMutation, internalQuery, type ActionCtx, type QueryCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { DodoPayments } from "dodopayments";
 import type { Subscription as DodoSubscription } from "dodopayments/resources/subscriptions";
@@ -680,6 +680,24 @@ function retryAfterSeconds(windowMs: number, elapsedMs: number): number {
   return Math.max(1, Math.ceil((windowMs - elapsedMs) / 1000));
 }
 
+function queryRecentlyStaleActiveSubscriptions(
+  ctx: QueryCtx,
+  userId: string,
+  now: number,
+) {
+  const recentCutoff = now - ON_DEMAND_RENEWAL_RECENT_WINDOW_MS;
+  return ctx.db
+    .query("subscriptions")
+    .withIndex("by_userId_status_currentPeriodEnd", (q) =>
+      q
+        .eq("userId", userId)
+        .eq("status", "active")
+        .gte("currentPeriodEnd", recentCutoff)
+        .lt("currentPeriodEnd", now),
+    )
+    .collect();
+}
+
 /**
  * Classifies all recently-stale rows for one user without starting provider
  * work. A live pending lease is user-scoped: claiming a different row while
@@ -760,17 +778,11 @@ export const claimRecentlyStaleSubscriptionForVerification = internalMutation({
     now: v.number(),
   },
   handler: async (ctx, args): Promise<OnDemandRenewalClaim> => {
-    const recentCutoff = args.now - ON_DEMAND_RENEWAL_RECENT_WINDOW_MS;
-    const subscriptions = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_userId_status_currentPeriodEnd", (q) =>
-        q
-          .eq("userId", args.userId)
-          .eq("status", "active")
-          .gte("currentPeriodEnd", recentCutoff)
-          .lt("currentPeriodEnd", args.now),
-      )
-      .collect();
+    const subscriptions = await queryRecentlyStaleActiveSubscriptions(
+      ctx,
+      args.userId,
+      args.now,
+    );
 
     if (subscriptions.length === 0) {
       // A caller with billing history but no recently-stale active row has no
@@ -833,17 +845,11 @@ export const getOnDemandRenewalResolution = internalQuery({
       return { kind: "active" };
     }
 
-    const recentCutoff = args.now - ON_DEMAND_RENEWAL_RECENT_WINDOW_MS;
-    const subscriptions = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_userId_status_currentPeriodEnd", (q) =>
-        q
-          .eq("userId", args.userId)
-          .eq("status", "active")
-          .gte("currentPeriodEnd", recentCutoff)
-          .lt("currentPeriodEnd", args.now),
-      )
-      .collect();
+    const subscriptions = await queryRecentlyStaleActiveSubscriptions(
+      ctx,
+      args.userId,
+      args.now,
+    );
 
     if (subscriptions.length === 0) {
       return { kind: "lapsed" };
