@@ -342,6 +342,42 @@ test('apiAccess entitlement past validUntil fails closed with 403 posture', asyn
   });
 });
 
+test('renewal verification pending is a distinct retryable 503', async () => {
+  await withMockedEntitlement({
+    planKey: 'free',
+    validUntil: 0,
+    features: { apiAccess: false },
+    billingStatus: 'renewal_verification_pending',
+    retryAfterSeconds: 19,
+  }, async () => {
+    const result = await validateBootstrapUserApiAccess('user_api_owner');
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 503);
+    assert.equal(result.reason, 'renewal_verification_pending');
+    assert.equal(result.error, 'Renewal verification pending');
+    assert.equal(result.headers['Retry-After'], '19');
+    assert.equal(result.headers['X-Billing-Verification'], 'renewal_verification_pending');
+  });
+});
+
+test('confirmed subscription lapse is distinct from verification failure', async () => {
+  await withMockedEntitlement({
+    planKey: 'free',
+    validUntil: 0,
+    features: { apiAccess: false },
+    billingStatus: 'subscription_lapsed',
+  }, async () => {
+    const result = await validateBootstrapUserApiAccess('user_api_owner');
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 403);
+    assert.equal(result.reason, 'subscription_lapsed');
+    assert.equal(result.error, 'API access subscription lapsed');
+    assert.equal(result.headers['X-Billing-Verification'], 'subscription_lapsed');
+  });
+});
+
 test('malformed entitlement response fails closed with 403 posture', async () => {
   await withMockedEntitlement({ ok: true }, async () => {
     const result = await validateBootstrapUserApiAccess('user_api_owner');

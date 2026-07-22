@@ -28,7 +28,13 @@ import {
 import { drainResponseHeaders, drainSuccessStatusOverride } from './_shared/response-headers';
 import { projectJsonResponse } from './_shared/response-projection';
 import { getRpcNoStoreReasonFromJson } from './_shared/cache-contract';
-import { checkEntitlementDetailed, getRequiredTier, getEntitlements, type CachedEntitlements } from './_shared/entitlement-check';
+import {
+  checkEntitlementDetailed,
+  getBillingVerificationDenial,
+  getRequiredTier,
+  getEntitlements,
+  type CachedEntitlements,
+} from './_shared/entitlement-check';
 import { resolveClerkSession } from './_shared/auth-session';
 import {
   INTERNAL_MCP_SIG_HEADER,
@@ -1195,6 +1201,15 @@ export function createDomainGateway(
     if (isUserApiKey && sessionUserId) {
       userKeyEntitlement = await getEntitlements(sessionUserId);
       recordUsageEntitlement(userKeyEntitlement);
+      const billingDenial = getBillingVerificationDenial(userKeyEntitlement, corsHeaders);
+      if (billingDenial) {
+        emitRequest(
+          billingDenial.status,
+          billingDenial.status === 503 ? 'billing_verification_503' : 'tier_403',
+          null,
+        );
+        return billingDenial;
+      }
       // Fail-OPEN on an unresolved entitlement (null ⇒ transient Convex/cache
       // failure, indistinguishable from "no row"): mirrors the #3199 block below
       // and avoids 403-ing an ACTIVE subscriber fleet-wide during a backend
@@ -1253,6 +1268,15 @@ export function createDomainGateway(
           if (!allowed && session.userId) {
             const ent = await getEntitlements(session.userId);
             recordUsageEntitlement(ent);
+            const billingDenial = getBillingVerificationDenial(ent, corsHeaders);
+            if (billingDenial) {
+              emitRequest(
+                billingDenial.status,
+                billingDenial.status === 503 ? 'billing_verification_503' : 'tier_403',
+                null,
+              );
+              return billingDenial;
+            }
             allowed = !!ent && ent.features.tier >= 1 && ent.validUntil >= Date.now();
           }
           if (!allowed) {
@@ -1291,6 +1315,7 @@ export function createDomainGateway(
         const entReason: RequestReason =
           entitlementResponse.status === 401 ? 'auth_401'
           : entitlementResponse.status === 403 ? 'tier_403'
+          : entitlementResponse.status === 503 ? 'billing_verification_503'
           : 'ok';
         emitRequest(entitlementResponse.status, entReason, null);
         return entitlementResponse.status === 401 || entitlementResponse.status === 403

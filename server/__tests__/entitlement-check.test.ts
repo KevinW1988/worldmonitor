@@ -55,6 +55,32 @@ function makeEntitlements(tier: number, planKey = "free") {
   };
 }
 
+async function withConvexEntitlementResponse<T>(
+  payload: unknown,
+  run: () => Promise<T>,
+): Promise<T> {
+  const originalSiteUrl = process.env.CONVEX_SITE_URL;
+  const originalSecret = process.env.CONVEX_SERVER_SHARED_SECRET;
+  process.env.CONVEX_SITE_URL = "https://example-deployment.convex.site";
+  process.env.CONVEX_SERVER_SHARED_SECRET = "test-secret";
+  vi.mocked(getCachedJson).mockResolvedValueOnce(null);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  ));
+  try {
+    return await run();
+  } finally {
+    if (originalSiteUrl === undefined) delete process.env.CONVEX_SITE_URL;
+    else process.env.CONVEX_SITE_URL = originalSiteUrl;
+    if (originalSecret === undefined) delete process.env.CONVEX_SERVER_SHARED_SECRET;
+    else process.env.CONVEX_SERVER_SHARED_SECRET = originalSecret;
+    vi.unstubAllGlobals();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -98,6 +124,44 @@ describe("gateway entitlement check", () => {
     const body = await result!.json();
     expect(body.error).toBe("Unable to verify entitlements");
     expect(body.requiredTier).toBe(1);
+  });
+
+  test.each([
+    ["renewal_verification_pending", "Renewal verification pending"],
+    ["renewal_verification_failed", "Renewal verification failed"],
+  ] as const)("%s returns a distinct retryable 503", async (billingStatus, error) => {
+    const result = await withConvexEntitlementResponse(
+      {
+        ...makeEntitlements(0),
+        validUntil: 0,
+        billingStatus,
+        retryAfterSeconds: 17,
+      },
+      () => checkEntitlement("test-user", "/api/market/v1/analyze-stock", {}),
+    );
+
+    expect(result?.status).toBe(503);
+    expect(result?.headers.get("Retry-After")).toBe("17");
+    expect(result?.headers.get("X-Billing-Verification")).toBe(billingStatus);
+    expect(await result?.json()).toMatchObject({ error, code: billingStatus });
+  });
+
+  test("subscription_lapsed returns a distinct hard-denial code", async () => {
+    const result = await withConvexEntitlementResponse(
+      {
+        ...makeEntitlements(0),
+        validUntil: 0,
+        billingStatus: "subscription_lapsed",
+      },
+      () => checkEntitlement("test-user", "/api/market/v1/analyze-stock", {}),
+    );
+
+    expect(result?.status).toBe(403);
+    expect(result?.headers.get("X-Billing-Verification")).toBe("subscription_lapsed");
+    expect(await result?.json()).toMatchObject({
+      error: "Subscription lapsed",
+      code: "subscription_lapsed",
+    });
   });
 
   test("checkEntitlement accepts Clerk role=pro for tier-1 gates without Convex entitlements", async () => {

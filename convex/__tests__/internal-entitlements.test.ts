@@ -1,11 +1,16 @@
 import { convexTest } from "convex-test";
-import { describe, expect, test, beforeEach, afterEach } from "vitest";
+import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
 import schema from "../schema";
+import { internal } from "../_generated/api";
+import { PRODUCT_CATALOG } from "../config/productCatalog";
+import { getFeaturesForPlan } from "../lib/entitlements";
 
 const modules = import.meta.glob("../**/*.ts");
 
 const CONVEX_SECRET = "test-convex-secret-internal-entitlements-46chXX";
 const USER_A = "user-test-entitlements";
+const NOW = 1_750_000_000_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function validHeaders(): Record<string, string> {
   return {
@@ -18,11 +23,14 @@ describe("/api/internal-entitlements HTTP action", () => {
   let originalSecret: string | undefined;
 
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
     originalSecret = process.env.CONVEX_SERVER_SHARED_SECRET;
     process.env.CONVEX_SERVER_SHARED_SECRET = CONVEX_SECRET;
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     if (originalSecret === undefined) {
       delete process.env.CONVEX_SERVER_SHARED_SECRET;
     } else {
@@ -41,6 +49,83 @@ describe("/api/internal-entitlements HTTP action", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { planKey: string };
     expect(body.planKey).toBe("free");
+  });
+
+  test("recently stale verification lease surfaces renewal_verification_pending", async () => {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("subscriptions", {
+        userId: USER_A,
+        dodoSubscriptionId: "sub_http_pending",
+        dodoProductId: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+        planKey: "pro_monthly",
+        status: "active",
+        currentPeriodStart: NOW - 31 * DAY_MS,
+        currentPeriodEnd: NOW - DAY_MS,
+        rawPayload: {},
+        updatedAt: NOW - DAY_MS,
+      });
+      await ctx.db.insert("entitlements", {
+        userId: USER_A,
+        planKey: "pro_monthly",
+        features: getFeaturesForPlan("pro_monthly"),
+        validUntil: NOW - DAY_MS,
+        updatedAt: NOW - DAY_MS,
+      });
+    });
+    await t.mutation(
+      internal.payments.billing.claimRecentlyStaleSubscriptionForVerification,
+      { userId: USER_A, now: NOW },
+    );
+
+    const res = await t.fetch("/api/internal-entitlements", {
+      method: "POST",
+      headers: validHeaders(),
+      body: JSON.stringify({ userId: USER_A }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      planKey: "free",
+      billingStatus: "renewal_verification_pending",
+      retryAfterSeconds: 15,
+    });
+  });
+
+  test("billing history without a verification candidate surfaces subscription_lapsed", async () => {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("subscriptions", {
+        userId: USER_A,
+        dodoSubscriptionId: "sub_http_lapsed",
+        dodoProductId: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+        planKey: "pro_monthly",
+        status: "expired",
+        currentPeriodStart: NOW - 31 * DAY_MS,
+        currentPeriodEnd: NOW - DAY_MS,
+        rawPayload: {},
+        updatedAt: NOW - DAY_MS,
+      });
+      await ctx.db.insert("entitlements", {
+        userId: USER_A,
+        planKey: "free",
+        features: getFeaturesForPlan("free"),
+        validUntil: NOW - 1,
+        updatedAt: NOW - 1,
+      });
+    });
+
+    const res = await t.fetch("/api/internal-entitlements", {
+      method: "POST",
+      headers: validHeaders(),
+      body: JSON.stringify({ userId: USER_A }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      planKey: "free",
+      billingStatus: "subscription_lapsed",
+    });
   });
 
   test("missing secret header → 401 UNAUTHORIZED", async () => {

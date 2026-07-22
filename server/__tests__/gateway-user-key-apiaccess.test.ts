@@ -63,7 +63,13 @@ const ACTIVE = {
   },
   validUntil: Date.now() + 86_400_000,
 };
-type Ent = { planKey: string; features: Record<string, unknown>; validUntil: number } | null;
+type Ent = {
+  planKey: string;
+  features: Record<string, unknown>;
+  validUntil: number;
+  billingStatus?: "subscription_lapsed" | "renewal_verification_pending" | "renewal_verification_failed";
+  retryAfterSeconds?: number;
+} | null;
 let entitlement: Ent = ACTIVE;
 const requiredTiers = new Map<string, number>();
 const entitlementsByUser = new Map<string, Ent>();
@@ -73,6 +79,26 @@ vi.mock("../_shared/entitlement-check", () => ({
   checkEntitlement: vi.fn().mockResolvedValue(null),
   checkEntitlementDetailed: vi.fn().mockResolvedValue({ response: null, entitlements: null }),
   getEntitlements: (...a: unknown[]) => getEntitlements(...a),
+  getBillingVerificationDenial: (ent: Ent, corsHeaders: Record<string, string>) => {
+    if (!ent?.billingStatus) return null;
+    const retryable = ent.billingStatus !== "subscription_lapsed";
+    return new Response(JSON.stringify({
+      error: retryable
+        ? ent.billingStatus === "renewal_verification_pending"
+          ? "Renewal verification pending"
+          : "Renewal verification failed"
+        : "Subscription lapsed",
+      code: ent.billingStatus,
+    }), {
+      status: retryable ? 503 : 403,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Billing-Verification": ent.billingStatus,
+        ...(retryable ? { "Retry-After": String(ent.retryAfterSeconds ?? 5) } : {}),
+        ...corsHeaders,
+      },
+    });
+  },
 }));
 
 // --- Stub user-key validation: a valid wm_ key resolves to a userId. ---------
@@ -85,8 +111,17 @@ vi.mock("../_shared/user-api-key", () => ({
 type MockClerkSession = { userId: string; orgId: string | null } | null;
 let clerkSession: MockClerkSession = null;
 const resolveClerkSession = vi.fn(async () => clerkSession);
+const validateBearerToken = vi.fn(async () => ({
+  valid: true,
+  userId: "acct_lapsed",
+  role: "free" as const,
+}));
 vi.mock("../_shared/auth-session", () => ({
   resolveClerkSession: (...a: unknown[]) => resolveClerkSession(...a),
+  validateBearerToken: (...a: unknown[]) => validateBearerToken(...a),
+}));
+vi.mock("../auth-session", () => ({
+  validateBearerToken: (...a: unknown[]) => validateBearerToken(...a),
 }));
 
 import { createDomainGateway } from "../gateway";
@@ -136,6 +171,7 @@ beforeEach(() => {
   checkRateLimit.mockClear().mockResolvedValue(null);
   getEntitlements.mockClear();
   resolveClerkSession.mockClear();
+  validateBearerToken.mockClear();
   validateUserApiKey.mockClear().mockResolvedValue({ userId: "acct_lapsed", keyId: "k1", name: "t" });
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -205,6 +241,56 @@ describe("#4611 — expired wm_ key rejected on all route classes", () => {
     entitlement = { planKey: "api_starter", features: { tier: 2, apiAccess: true, apiRateLimit: 60 }, validUntil: Date.now() - 1_000 };
     const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
     expect(res.status).toBe(403);
+  });
+
+  test("renewal verification pending on a wm_ key returns retryable 503", async () => {
+    entitlement = {
+      planKey: "free",
+      features: { tier: 0, apiAccess: false, apiRateLimit: 0 },
+      validUntil: 0,
+      billingStatus: "renewal_verification_pending",
+      retryAfterSeconds: 13,
+    };
+
+    const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("13");
+    expect(await res.json()).toMatchObject({ code: "renewal_verification_pending" });
+  });
+
+  test("confirmed lapse on a wm_ key returns subscription_lapsed", async () => {
+    entitlement = {
+      planKey: "free",
+      features: { tier: 0, apiAccess: false, apiRateLimit: 0 },
+      validUntil: 0,
+      billingStatus: "subscription_lapsed",
+    };
+
+    const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "subscription_lapsed" });
+  });
+
+  test("legacy premium bearer surfaces renewal verification failure", async () => {
+    entitlement = {
+      planKey: "free",
+      features: { tier: 0, apiAccess: false, apiRateLimit: 0 },
+      validUntil: 0,
+      billingStatus: "renewal_verification_failed",
+      retryAfterSeconds: 23,
+    };
+    const req = new Request(`https://www.worldmonitor.app${PREMIUM_PATH}`, {
+      method: "POST",
+      headers: { Authorization: "Bearer valid-legacy-session" },
+    });
+
+    const res = await makeGateway()(req, ctx);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("23");
+    expect(await res.json()).toMatchObject({ code: "renewal_verification_failed" });
   });
 
   test("null entitlement (transient Convex/cache failure) → 200 fail-open, active customers not locked out", async () => {

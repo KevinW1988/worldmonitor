@@ -159,11 +159,43 @@ http.route({
       });
     }
 
-    const result = await ctx.runQuery(
+    let result = await ctx.runQuery(
       internal.entitlements.getEntitlementsByUserId,
       { userId: body.userId },
     );
-    return new Response(JSON.stringify(result), {
+    let billingStatus:
+      | "subscription_lapsed"
+      | "renewal_verification_pending"
+      | "renewal_verification_failed"
+      | undefined;
+    let retryAfterSeconds: number | undefined;
+
+    // Expired stored entitlements are deliberately returned as free-tier
+    // defaults by the query. Before the gateway turns that into a hard denial,
+    // give a recently-stale active subscription one bounded provider re-check.
+    if (result.features.tier === 0) {
+      const verification = await ctx.runAction(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        { userId: body.userId },
+      );
+      if (verification.status === "active") {
+        result = await ctx.runQuery(
+          internal.entitlements.getEntitlementsByUserId,
+          { userId: body.userId },
+        );
+      } else if (verification.status !== "not_applicable") {
+        billingStatus = verification.status;
+        if ("retryAfterSeconds" in verification) {
+          retryAfterSeconds = verification.retryAfterSeconds;
+        }
+      }
+    }
+
+    return new Response(JSON.stringify({
+      ...result,
+      ...(billingStatus ? { billingStatus } : {}),
+      ...(retryAfterSeconds != null ? { retryAfterSeconds } : {}),
+    }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

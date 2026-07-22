@@ -45,6 +45,11 @@ export interface CachedEntitlements {
     apiDailyAllowance?: number;
   };
   validUntil: number;
+  billingStatus?:
+    | 'subscription_lapsed'
+    | 'renewal_verification_pending'
+    | 'renewal_verification_failed';
+  retryAfterSeconds?: number;
 }
 
 export interface EntitlementCheckResult {
@@ -234,6 +239,57 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
 }
 
 /**
+ * Turns Convex's billing-verification metadata into the shared gateway denial
+ * contract. Callers use this before their ordinary tier/feature checks so a
+ * provider outage is never flattened into a misleading "upgrade required".
+ */
+export function getBillingVerificationDenial(
+  entitlements: CachedEntitlements | null | undefined,
+  corsHeaders: Record<string, string>,
+  requiredTier?: number,
+): Response | null {
+  const status = entitlements?.billingStatus;
+  if (!status) return null;
+
+  const commonHeaders = {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store',
+    'X-Billing-Verification': status,
+    ...corsHeaders,
+  };
+  const requiredTierBody = requiredTier == null ? {} : { requiredTier };
+
+  if (status === 'subscription_lapsed') {
+    return new Response(
+      JSON.stringify({
+        error: 'Subscription lapsed',
+        code: status,
+        ...requiredTierBody,
+      }),
+      { status: 403, headers: commonHeaders },
+    );
+  }
+
+  const rawRetryAfter = entitlements.retryAfterSeconds;
+  const retryAfter = Number.isFinite(rawRetryAfter)
+    ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter!)))
+    : 5;
+  return new Response(
+    JSON.stringify({
+      error: status === 'renewal_verification_pending'
+        ? 'Renewal verification pending'
+        : 'Renewal verification failed',
+      code: status,
+      ...requiredTierBody,
+    }),
+    {
+      status: 503,
+      headers: { ...commonHeaders, 'Retry-After': String(retryAfter) },
+    },
+  );
+}
+
+/**
  * Checks whether the current request is allowed based on tier entitlements.
  *
  * Returns:
@@ -295,6 +351,11 @@ export async function checkEntitlementDetailed(
       ),
       entitlements: null,
     };
+  }
+
+  const billingDenial = getBillingVerificationDenial(ent, corsHeaders, requiredTier);
+  if (billingDenial) {
+    return { response: billingDenial, entitlements: ent };
   }
 
   if (ent.features.tier >= requiredTier) {

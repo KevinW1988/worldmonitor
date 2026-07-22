@@ -260,6 +260,40 @@ function hasCurrentApiAccess(value) {
   return Boolean(value.features?.apiAccess === true && Number.isFinite(validUntil) && validUntil >= Date.now());
 }
 
+function billingVerificationFailure(value) {
+  const status = value?.billingStatus;
+  if (status === 'subscription_lapsed') {
+    return {
+      ok: false,
+      status: 403,
+      error: 'API access subscription lapsed',
+      reason: status,
+      headers: noStoreHeaders({ 'X-Billing-Verification': status }),
+    };
+  }
+  if (status !== 'renewal_verification_pending' && status !== 'renewal_verification_failed') {
+    return null;
+  }
+
+  const rawRetryAfter = Number(value?.retryAfterSeconds);
+  const retryAfter = Number.isFinite(rawRetryAfter)
+    ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter)))
+    : VALIDATION_RETRY_AFTER_SECONDS;
+  return {
+    ok: false,
+    status: 503,
+    error: status === 'renewal_verification_pending'
+      ? 'Renewal verification pending'
+      : 'Renewal verification failed',
+    reason: status,
+    unavailable: true,
+    headers: noStoreHeaders({
+      'Retry-After': String(retryAfter),
+      'X-Billing-Verification': status,
+    }),
+  };
+}
+
 export async function validateBootstrapUserApiAccess(userId) {
   if (!userId || typeof userId !== 'string') {
     return { ok: false, status: 403, error: 'API access subscription required', reason: 'missing-user' };
@@ -287,6 +321,9 @@ async function validateBootstrapUserApiAccessUncached(userId) {
   if (result.value && typeof result.value === 'object') {
     await writeCachedJson(cacheKey, result.value, ENTITLEMENT_CACHE_TTL_SECONDS);
   }
+
+  const billingFailure = billingVerificationFailure(result.value);
+  if (billingFailure) return billingFailure;
 
   if (!hasCurrentApiAccess(result.value)) {
     return { ok: false, status: 403, error: 'API access subscription required', reason: 'forbidden' };
