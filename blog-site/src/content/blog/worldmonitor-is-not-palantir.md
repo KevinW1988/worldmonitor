@@ -7,6 +7,7 @@ audience: "Press, analysts, developers, investors, anyone who has seen the Palan
 heroImage: "/blog/og/worldmonitor-is-not-palantir.png"
 pubDate: "2026-07-21"
 modifiedDate: "2026-07-22"
+pinned: true
 ---
 
 Run this in a terminal:
