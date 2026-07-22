@@ -13,8 +13,8 @@ import { redisPipeline as rawRedisPipeline } from '../_upstash-json.js';
 import {
   getBillingVerificationDenial,
   getEntitlements,
-  type BillingVerificationStatus,
 } from '../../server/_shared/entitlement-check';
+import type { BillingVerificationCode } from './billing-denial';
 import {
   buildInternalMcpHeaders,
   signInternalMcpRequest,
@@ -157,18 +157,52 @@ export function wwwAuthHeader(resourceMetadataUrl: string, errorParam = ''): str
 
 export function getMcpBillingVerificationDenial(
   entitlements: {
-    billingStatus?: BillingVerificationStatus;
+    billingStatus?: BillingVerificationCode;
     retryAfterSeconds?: number;
   } | null | undefined,
   corsHeaders: Record<string, string>,
   id: unknown = null,
 ): Response | null {
+  const billingStatus = entitlements?.billingStatus;
+  if (billingStatus === 'entitlement_verification_unavailable') {
+    // Gateway-synthesized backend-unreachable 503 (server/gateway.ts wm_-key
+    // branch). The shared Convex-facing helper doesn't recognize this code, so
+    // build the same retryable envelope here; clamp mirrors the shared helper.
+    const raw = entitlements?.retryAfterSeconds;
+    const retryAfter = Number.isFinite(raw)
+      ? Math.max(1, Math.min(60, Math.ceil(raw as number)))
+      : 5;
+    return new Response(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: id ?? null,
+        error: {
+          code: -32603,
+          message: 'Unable to verify API access. Retry shortly.',
+          data: { code: billingStatus },
+        },
+      }),
+      {
+        status: 503,
+        headers: new Headers({
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+          'Retry-After': String(retryAfter),
+          'X-Billing-Verification': billingStatus,
+        }),
+      },
+    );
+  }
+
   // The shared helper owns status, retry normalization, no-store, and billing
   // headers. Its parameter asks only for the billing fields, so both the
   // McpHandlerDeps entitlement shape and dispatch's synthesized
   // BillingDenialError shape are directly assignable.
-  const denial = getBillingVerificationDenial(entitlements, corsHeaders);
-  const billingStatus = entitlements?.billingStatus;
+  const denial = getBillingVerificationDenial(
+    billingStatus ? { billingStatus, retryAfterSeconds: entitlements?.retryAfterSeconds } : null,
+    corsHeaders,
+  );
   if (!denial || !billingStatus) return null;
 
   const retryable = denial.status === 503;

@@ -502,7 +502,7 @@ test('stale cached entitlement (past validUntil) re-validates against Convex', a
   });
 });
 
-test('transient Convex HTTP 5xx on entitlement check is a retryable 503, not 403', async () => {
+test('transient Convex HTTP 5xx on entitlement check emits the entitlement_verification_unavailable contract', async () => {
   await withMockedConvex(async (calls) => {
     globalThis.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -525,7 +525,13 @@ test('transient Convex HTTP 5xx on entitlement check is a retryable 503, not 403
     assert.equal(result.ok, false);
     assert.equal(result.status, 503);
     assert.equal(result.unavailable, true);
-    assert.equal(result.error, 'Service temporarily unavailable');
+    // Matches server/gateway.ts's wm_-key branch and docs/usage-errors.mdx —
+    // the bootstrap surface must speak the same billing-verification contract.
+    assert.equal(result.error, 'Unable to verify API access');
+    assert.equal(result.reason, 'entitlement_verification_unavailable');
+    assert.equal(result.headers['X-Billing-Verification'], 'entitlement_verification_unavailable');
+    assert.equal(result.headers['X-Validation-Mode'], 'degraded');
+    assert.equal(result.headers['Retry-After'], '5');
   });
 });
 

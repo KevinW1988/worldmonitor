@@ -2929,6 +2929,36 @@ describe('api/mcp.ts — U7 Pro-path', () => {
     }
   });
 
+  it('error: mid-call backend-unreachable 503 keeps the entitlement_verification_unavailable contract', async () => {
+    const { deps } = makeProDeps();
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ error: 'Unable to verify API access', code: 'entitlement_verification_unavailable' }),
+      {
+        status: 503,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+          'Retry-After': '5',
+          'X-Billing-Verification': 'entitlement_verification_unavailable',
+        },
+      },
+    );
+    try {
+      const res = await mcpHandler(proReq('POST', callBody('get_country_risk', { country_code: 'US' })), deps);
+
+      assert.equal(res.status, 503);
+      assert.equal(res.headers.get('Retry-After'), '5');
+      assert.equal(res.headers.get('Cache-Control'), 'no-store');
+      assert.equal(res.headers.get('X-Billing-Verification'), 'entitlement_verification_unavailable');
+      const body = await res.json();
+      assert.equal(body.error?.code, -32603);
+      assert.equal(body.error?.data?.code, 'entitlement_verification_unavailable');
+      assert.equal(body.id, 100);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('error: mid-call confirmed lapse from the gateway surfaces -32002 + 403', async () => {
     const { deps } = makeProDeps();
     globalThis.fetch = async () => new Response(

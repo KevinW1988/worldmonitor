@@ -229,15 +229,21 @@ type StaleActiveSubscriptionsPage = {
   isDone: boolean;
 };
 
+// Shared cooldown vocabulary for the on-demand renewal state machines below:
+// a live pending lease, a failed-verification cooldown, or an affirmative
+// lapse. Composed (not repeated) so a shape change propagates to every union.
+type RenewalCooldownOutcome =
+  | { kind: "pending"; retryAfterSeconds: number }
+  | { kind: "failed"; retryAfterSeconds: number }
+  | { kind: "lapsed" };
+
 type OnDemandRenewalClaim =
   | {
       kind: "claimed";
       claimedAt: number;
       subscription: StaleActiveSubscriptionForRenewalReconciliation;
     }
-  | { kind: "pending"; retryAfterSeconds: number }
-  | { kind: "failed"; retryAfterSeconds: number }
-  | { kind: "lapsed" }
+  | RenewalCooldownOutcome
   | { kind: "not_applicable" };
 
 type OnDemandRenewalCandidate = {
@@ -250,16 +256,12 @@ type OnDemandRenewalCandidate = {
 
 type OnDemandRenewalCandidateSelection<T extends OnDemandRenewalCandidate> =
   | { kind: "candidate"; candidate: T }
-  | { kind: "pending"; retryAfterSeconds: number }
-  | { kind: "failed"; retryAfterSeconds: number }
-  | { kind: "lapsed" };
+  | RenewalCooldownOutcome;
 
 type OnDemandRenewalResolution =
   | { kind: "active" }
   | { kind: "unresolved" }
-  | { kind: "pending"; retryAfterSeconds: number }
-  | { kind: "failed"; retryAfterSeconds: number }
-  | { kind: "lapsed" };
+  | RenewalCooldownOutcome;
 
 type OnDemandRenewalResult =
   | { status: "active" }
@@ -1459,49 +1461,40 @@ export const verifyRecentlyStaleSubscriptionOnDemand = internalAction({
       return onDemandRenewalFailureResult();
     }
 
+    // Every non-active resolution finalizes the claimed row as "lapsed"
+    // (definitively non-covering) and differs only in what the caller is told.
+    // Single-copy so finalize-failure handling cannot drift between cases.
+    const finalizeLapsedAndReturn = async (
+      onSuccess: OnDemandRenewalResult,
+    ): Promise<OnDemandRenewalResult> => {
+      const finalized = await safeFinalize("lapsed");
+      if (!finalized) await bestEffortFinalizeFailed();
+      return finalized ? onSuccess : onDemandRenewalFailureResult();
+    };
+
     switch (resolution.kind) {
       case "active":
         // A concurrent webhook or another subscription proves coverage. As
         // above, finalization is cleanup and cannot revoke that confirmation.
         await safeFinalize("active");
         return { status: "active" };
-      case "pending": {
-        const finalized = await safeFinalize("lapsed");
-        if (!finalized) await bestEffortFinalizeFailed();
-        return finalized
-          ? {
-              status: "renewal_verification_pending",
-              retryAfterSeconds: resolution.retryAfterSeconds,
-            }
-          : onDemandRenewalFailureResult();
-      }
-      case "unresolved": {
-        const finalized = await safeFinalize("lapsed");
-        if (!finalized) await bestEffortFinalizeFailed();
-        return finalized
-          ? {
-              status: "renewal_verification_pending",
-              retryAfterSeconds: ON_DEMAND_RENEWAL_PROGRESS_RETRY_SECONDS,
-            }
-          : onDemandRenewalFailureResult();
-      }
-      case "failed": {
-        const finalized = await safeFinalize("lapsed");
-        if (!finalized) await bestEffortFinalizeFailed();
-        return finalized
-          ? {
-              status: "renewal_verification_failed",
-              retryAfterSeconds: resolution.retryAfterSeconds,
-            }
-          : onDemandRenewalFailureResult();
-      }
-      case "lapsed": {
-        const finalized = await safeFinalize("lapsed");
-        if (!finalized) await bestEffortFinalizeFailed();
-        return finalized
-          ? { status: "subscription_lapsed" }
-          : onDemandRenewalFailureResult();
-      }
+      case "pending":
+        return finalizeLapsedAndReturn({
+          status: "renewal_verification_pending",
+          retryAfterSeconds: resolution.retryAfterSeconds,
+        });
+      case "unresolved":
+        return finalizeLapsedAndReturn({
+          status: "renewal_verification_pending",
+          retryAfterSeconds: ON_DEMAND_RENEWAL_PROGRESS_RETRY_SECONDS,
+        });
+      case "failed":
+        return finalizeLapsedAndReturn({
+          status: "renewal_verification_failed",
+          retryAfterSeconds: resolution.retryAfterSeconds,
+        });
+      case "lapsed":
+        return finalizeLapsedAndReturn({ status: "subscription_lapsed" });
     }
   },
 });

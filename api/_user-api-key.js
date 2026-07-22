@@ -357,7 +357,22 @@ async function validateBootstrapUserApiAccessUncached(userId) {
 
   const result = await postConvexJson(CONVEX_ENTITLEMENTS_PATH, { userId });
   if (!result.ok) {
-    return serviceUnavailable();
+    // The entitlement backend could not be reached to verify a wm_ key: emit
+    // the documented entitlement_verification_unavailable contract
+    // (docs/usage-errors.mdx), matching server/gateway.ts's wm_-key branch.
+    // X-Validation-Mode: degraded is kept for existing monitors.
+    return {
+      ok: false,
+      status: 503,
+      error: 'Unable to verify API access',
+      reason: 'entitlement_verification_unavailable',
+      unavailable: true,
+      headers: noStoreHeaders({
+        'Retry-After': String(VALIDATION_RETRY_AFTER_SECONDS),
+        'X-Validation-Mode': 'degraded',
+        'X-Billing-Verification': 'entitlement_verification_unavailable',
+      }),
+    };
   }
 
   if (result.value && typeof result.value === 'object') {

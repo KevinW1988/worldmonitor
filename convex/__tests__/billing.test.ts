@@ -3754,6 +3754,81 @@ describe("payments billing missed renewal reconciliation", () => {
       expect((await readEntitlement(t, TEST_USER_ID))?.planKey).toBe("free");
     });
 
+    test("threads a sibling's failed cooldown into the resolution-stage Retry-After", async () => {
+      const t = convexTest(schema, modules);
+      const staleEnd = NOW - DAY_MS;
+      const strongerId = await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_sibling_failed_stronger",
+        planKey: "enterprise",
+        dodoProductId: PRODUCT_CATALOG.enterprise.dodoProductId!,
+        currentPeriodEnd: staleEnd,
+      });
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_sibling_failed_weaker",
+        currentPeriodEnd: staleEnd,
+        seedEntitlement: false,
+      });
+      // The stronger sibling is 20s into its 60s failed cooldown, so the claim
+      // skips it and verifies the weaker row.
+      await t.run(async (ctx) => {
+        await ctx.db.patch(strongerId, {
+          renewalVerificationState: "failed",
+          renewalVerificationAttemptAt: NOW - 20_000,
+        });
+      });
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_sibling_failed_weaker",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "expired",
+              previous_billing_date: new Date(NOW - 31 * DAY_MS).toISOString(),
+              next_billing_date: new Date(staleEnd).toISOString(),
+            },
+          ],
+        },
+      );
+
+      // The resolution stage must quote the SIBLING's remaining failed
+      // cooldown (60s - 20s elapsed = 40s), not the fixed 1s progress retry
+      // the neighboring 'unresolved' branch returns.
+      expect(result).toEqual({
+        status: "renewal_verification_failed",
+        retryAfterSeconds: 40,
+      });
+      expect((await readSub(t, "on_demand_sibling_failed_weaker"))?.status).toBe("expired");
+    });
+
+    test("getOnDemandRenewalResolution reports a live sibling lease as pending", async () => {
+      const t = convexTest(schema, modules);
+      const staleEnd = NOW - DAY_MS;
+      const rowId = await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_resolution_pending",
+        currentPeriodEnd: staleEnd,
+      });
+      await t.run(async (ctx) => {
+        await ctx.db.patch(rowId, {
+          renewalVerificationState: "pending",
+          renewalVerificationAttemptAt: NOW - 1_000,
+        });
+      });
+
+      const resolution = await t.query(
+        internal.payments.billing.getOnDemandRenewalResolution,
+        { userId: TEST_USER_ID, now: NOW },
+      );
+
+      // Reachable only when a sibling lease starts between this request's
+      // claim and its resolution read; the guard must quote the leader's
+      // expected completion (3s - 1s elapsed = 2s), not lapsed/unresolved.
+      expect(resolution).toEqual({ kind: "pending", retryAfterSeconds: 2 });
+    });
+
     test("does not report a user-level lapse until every recently-stale subscription is resolved", async () => {
       const t = convexTest(schema, modules);
       const staleEnd = NOW - DAY_MS;

@@ -42,3 +42,20 @@ test('Retry-After clamp bounds match across the TS/JS mirror', () => {
     );
   }
 });
+
+test('Retry-After fallback default matches across the TS/JS mirror', () => {
+  const ts = read('server/_shared/entitlement-check.ts');
+  const js = read('api/_user-api-key.js');
+
+  // The TS clampRetryAfterSeconds falls back to a hardcoded literal while the
+  // JS mirror falls back to VALIDATION_RETRY_AFTER_SECONDS — previously
+  // unpinned, so the two surfaces could quote different Retry-After hints for
+  // the same failure without any test going red.
+  const tsFallback = ts.match(/function clampRetryAfterSeconds[\s\S]*?:\s*(\d+);\n\}/);
+  assert.ok(tsFallback, 'clampRetryAfterSeconds fallback literal not found in entitlement-check.ts');
+  assert.equal(
+    Number(tsFallback[1]),
+    constant(js, '_user-api-key.js', 'VALIDATION_RETRY_AFTER_SECONDS'),
+    'Retry-After fallback default drifted between entitlement-check.ts and _user-api-key.js',
+  );
+});

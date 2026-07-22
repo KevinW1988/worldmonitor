@@ -50,11 +50,23 @@ describe('billing-denial propagation helpers', () => {
     );
   });
 
-  it('entitlement_verification_unavailable is not a tool-level typed denial', () => {
-    // That code is wm_-key-surface-only; tool fetches sign with internal-MCP
-    // HMAC and must treat it as an ordinary retryable failure.
-    const res = response(503, { 'X-Billing-Verification': 'entitlement_verification_unavailable' });
-    throwIfBillingDenial(res, 'tool');
+  it('entitlement_verification_unavailable throws a typed retryable denial', () => {
+    // env_key/user_key tool fetches sign with X-WorldMonitor-Key (api/mcp/auth.ts
+    // buildAuthHeaders), so the gateway's backend-unreachable 503 reaches this
+    // layer and must keep its billing contract instead of flattening into the
+    // generic -32603 at HTTP 200.
+    const res = response(503, {
+      'X-Billing-Verification': 'entitlement_verification_unavailable',
+      'Retry-After': '5',
+    });
+    assert.throws(
+      () => throwIfBillingDenial(res, 'tool'),
+      (err) =>
+        err instanceof BillingDenialError &&
+        err.status === 503 &&
+        err.billingCode === 'entitlement_verification_unavailable' &&
+        err.retryAfterSeconds === 5,
+    );
   });
 
   it('tolerates test doubles without a headers object', () => {

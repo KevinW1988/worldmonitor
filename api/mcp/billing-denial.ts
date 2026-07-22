@@ -7,12 +7,18 @@
 
 import type { BillingVerificationStatus } from '../../server/_shared/entitlement-check';
 
-export type BillingVerificationCode = BillingVerificationStatus;
+export type BillingVerificationCode =
+  | BillingVerificationStatus
+  // Gateway-synthesized (server/gateway.ts wm_-key branch): backend-unreachable
+  // fail-closed 503. Deliberately NOT in the Convex-facing
+  // BillingVerificationStatus union — Convex never produces it.
+  | 'entitlement_verification_unavailable';
 
 const BILLING_VERIFICATION_CODES: ReadonlySet<string> = new Set([
   'subscription_lapsed',
   'renewal_verification_pending',
   'renewal_verification_failed',
+  'entitlement_verification_unavailable',
 ] satisfies BillingVerificationCode[]);
 
 export class BillingDenialError extends Error {
