@@ -73,6 +73,7 @@
                   "usage-auth",
                   "usage-rate-limits",
                   "usage-errors",
+                  "sandbox",
                   "pricing",
                   "accounts",
                   "api-keys",

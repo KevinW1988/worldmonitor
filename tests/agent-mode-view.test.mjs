@@ -32,6 +32,41 @@ describe('agent-mode view (/?mode=agent)', () => {
     assert.match(view.authentication.summary, /Authentication/);
   });
 
+  it('advertises the sandbox, quickstart, and docs MCP endpoints', () => {
+    assert.equal(view.endpoints.sandbox.url, 'https://www.worldmonitor.app/sandbox/index.json');
+    assert.doesNotThrow(
+      () => readFileSync(join(ROOT, 'public/sandbox/index.json')),
+      'sandbox index advertised but public/sandbox/index.json is missing',
+    );
+    assert.equal(view.endpoints.docsMcp.url, 'https://www.worldmonitor.app/docs/mcp');
+    assert.ok(view.quickstart && typeof view.quickstart === 'object');
+    for (const key of ['sandbox', 'rest', 'mcp']) {
+      assert.match(view.quickstart[key], /^curl /, `quickstart.${key} must be a runnable curl line`);
+    }
+    // The sandbox quickstart must reference a fixture that actually ships.
+    assert.doesNotThrow(() => readFileSync(join(ROOT, 'public/sandbox/get-resilience-score.json')));
+  });
+
+  it('advertises the schemamap and every section llms.txt', () => {
+    assert.equal(view.discovery.schemamap, 'https://www.worldmonitor.app/schemamap.xml');
+    assert.doesNotThrow(() => readFileSync(join(ROOT, 'public/schemamap.xml')));
+    const sections = view.discovery.sectionLlmsTxt;
+    assert.deepEqual(Object.keys(sections).sort(), ['api', 'blog', 'developers', 'docs']);
+    const trackedSectionFiles = {
+      api: 'public/api/llms.txt',
+      developers: 'public/developers/llms.txt',
+      blog: 'blog-site/public/llms.txt', // copied to /blog/llms.txt by the Astro build
+    };
+    for (const [section, path] of Object.entries(trackedSectionFiles)) {
+      assert.doesNotThrow(
+        () => readFileSync(join(ROOT, path)),
+        `${path} must exist for discovery.sectionLlmsTxt.${section}`,
+      );
+    }
+    // /docs/llms.txt is Mintlify-served; pin the URL so a docs-host move shows up here.
+    assert.equal(sections.docs, 'https://www.worldmonitor.app/docs/llms.txt');
+  });
+
   it('stays in parity with the MCP server card and A2A agent card', () => {
     assert.equal(view.endpoints.mcp.url, serverCard.url);
     assert.equal(view.endpoints.mcp.tools, serverCard.tools.length);
