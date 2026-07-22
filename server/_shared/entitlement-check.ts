@@ -127,6 +127,26 @@ const ENV_PREFIX = process.env.DODO_PAYMENTS_ENVIRONMENT === 'live_mode' ? 'live
 
 // Cache TTL: 15 min — short enough that subscription expiry is reflected promptly (P2-5)
 const ENTITLEMENT_CACHE_TTL_SECONDS = 900;
+const LAPSED_BILLING_MARKER_TTL_SECONDS = 300;
+
+function isBillingVerificationStatus(
+  value: unknown,
+): value is NonNullable<CachedEntitlements['billingStatus']> {
+  return value === 'subscription_lapsed'
+    || value === 'renewal_verification_pending'
+    || value === 'renewal_verification_failed';
+}
+
+function billingMarkerTtlSeconds(entitlements: CachedEntitlements): number | null {
+  if (!isBillingVerificationStatus(entitlements.billingStatus)) return null;
+  if (entitlements.billingStatus === 'subscription_lapsed') {
+    return LAPSED_BILLING_MARKER_TTL_SECONDS;
+  }
+  const retryAfter = entitlements.retryAfterSeconds;
+  return Number.isFinite(retryAfter)
+    ? Math.max(1, Math.min(60, Math.ceil(retryAfter!)))
+    : 5;
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -169,6 +189,10 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
 
     if (cached && typeof cached === 'object') {
       const ent = cached as CachedEntitlements;
+      // Verification markers have their own short Redis TTL. Serve them even
+      // though validUntil is expired so cooldown requests stop at Redis instead
+      // of repeating the Convex action/claim chain.
+      if (billingMarkerTtlSeconds(ent) !== null) return ent;
       // Only use cached data if it hasn't expired AND has the post-U10 shape.
       //
       // Legacy cache entries written before plan 2026-05-10-001 U10 lack the
@@ -223,7 +247,12 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
       // very call paths this file gates — the same shape PR #3505 fixed for the
       // Clerk-only-no-Convex outlier in api/widget-agent.ts.
       try {
-        await setCachedJson(`entitlements:${ENV_PREFIX}:${userId}`, result, ENTITLEMENT_CACHE_TTL_SECONDS, true);
+        await setCachedJson(
+          `entitlements:${ENV_PREFIX}:${userId}`,
+          result,
+          billingMarkerTtlSeconds(result) ?? ENTITLEMENT_CACHE_TTL_SECONDS,
+          true,
+        );
       } catch (cacheErr) {
         console.warn('[entitlement-check] cache write failed (non-fatal):', cacheErr instanceof Error ? cacheErr.message : String(cacheErr));
       }
@@ -249,7 +278,7 @@ export function getBillingVerificationDenial(
   requiredTier?: number,
 ): Response | null {
   const status = entitlements?.billingStatus;
-  if (!status) return null;
+  if (!isBillingVerificationStatus(status)) return null;
 
   const commonHeaders = {
     'Content-Type': 'application/json',
@@ -270,7 +299,7 @@ export function getBillingVerificationDenial(
     );
   }
 
-  const rawRetryAfter = entitlements.retryAfterSeconds;
+  const rawRetryAfter = entitlements?.retryAfterSeconds;
   const retryAfter = Number.isFinite(rawRetryAfter)
     ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter!)))
     : 5;

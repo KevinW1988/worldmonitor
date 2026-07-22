@@ -74,32 +74,16 @@ let entitlement: Ent = ACTIVE;
 const requiredTiers = new Map<string, number>();
 const entitlementsByUser = new Map<string, Ent>();
 const getEntitlements = vi.fn(async (userId: string) => entitlementsByUser.get(userId) ?? entitlement);
-vi.mock("../_shared/entitlement-check", () => ({
-  getRequiredTier: (pathname: string) => requiredTiers.get(pathname) ?? null,
-  checkEntitlement: vi.fn().mockResolvedValue(null),
-  checkEntitlementDetailed: vi.fn().mockResolvedValue({ response: null, entitlements: null }),
-  getEntitlements: (...a: unknown[]) => getEntitlements(...a),
-  getBillingVerificationDenial: (ent: Ent, corsHeaders: Record<string, string>) => {
-    if (!ent?.billingStatus) return null;
-    const retryable = ent.billingStatus !== "subscription_lapsed";
-    return new Response(JSON.stringify({
-      error: retryable
-        ? ent.billingStatus === "renewal_verification_pending"
-          ? "Renewal verification pending"
-          : "Renewal verification failed"
-        : "Subscription lapsed",
-      code: ent.billingStatus,
-    }), {
-      status: retryable ? 503 : 403,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Billing-Verification": ent.billingStatus,
-        ...(retryable ? { "Retry-After": String(ent.retryAfterSeconds ?? 5) } : {}),
-        ...corsHeaders,
-      },
-    });
-  },
-}));
+vi.mock("../_shared/entitlement-check", async (importActual) => {
+  const actual = await importActual<typeof import("../_shared/entitlement-check")>();
+  return {
+    ...actual,
+    getRequiredTier: (pathname: string) => requiredTiers.get(pathname) ?? null,
+    checkEntitlement: vi.fn().mockResolvedValue(null),
+    checkEntitlementDetailed: vi.fn().mockResolvedValue({ response: null, entitlements: null }),
+    getEntitlements: (...a: unknown[]) => getEntitlements(...a),
+  };
+});
 
 // --- Stub user-key validation: a valid wm_ key resolves to a userId. ---------
 const validateUserApiKey = vi.fn(async () => ({ userId: "acct_lapsed", keyId: "k1", name: "t" }));

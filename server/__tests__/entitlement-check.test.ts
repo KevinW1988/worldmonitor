@@ -164,6 +164,30 @@ describe("gateway entitlement check", () => {
     });
   });
 
+  test("serves a short-lived verification marker from Redis without another Convex request", async () => {
+    vi.mocked(getCachedJson).mockResolvedValueOnce({
+      ...makeEntitlements(0),
+      validUntil: 0,
+      billingStatus: "renewal_verification_pending",
+      retryAfterSeconds: 11,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await checkEntitlement(
+        "test-user",
+        "/api/market/v1/analyze-stock",
+        {},
+      );
+
+      expect(result?.status).toBe(503);
+      expect(result?.headers.get("Retry-After")).toBe("11");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("checkEntitlement accepts Clerk role=pro for tier-1 gates without Convex entitlements", async () => {
     const result = await checkEntitlement(
       "test-user",

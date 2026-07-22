@@ -378,6 +378,27 @@ test('confirmed subscription lapse is distinct from verification failure', async
   });
 });
 
+test('short-lived verification marker is served from Redis without another Convex request', async () => {
+  await withMockedConvex(async (calls) => {
+    const result = await validateBootstrapUserApiAccess('user_api_owner');
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 503);
+    assert.equal(result.reason, 'renewal_verification_failed');
+    assert.equal(calls.some((call) => call.url.endsWith('/api/internal-entitlements')), false);
+  }, {
+    redisCache: {
+      'entitlements:test:user_api_owner': {
+        planKey: 'free',
+        validUntil: 0,
+        features: { apiAccess: false },
+        billingStatus: 'renewal_verification_failed',
+        retryAfterSeconds: 9,
+      },
+    },
+  });
+});
+
 test('malformed entitlement response fails closed with 403 posture', async () => {
   await withMockedEntitlement({ ok: true }, async () => {
     const result = await validateBootstrapUserApiAccess('user_api_owner');

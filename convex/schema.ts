@@ -598,9 +598,10 @@ export default defineSchema({
     // Request-path renewal verification (#4770). The state + attempt timestamp
     // form a durable lease/cooldown shared by every Convex action instance, so
     // concurrent premium requests cannot fan out into duplicate Dodo lookups.
-    // Kept separate from the daily reconciler's backoff fields above: a cron
-    // failure should not suppress the bounded customer-facing rescue attempt,
-    // and a request-path failure should not perturb the cron's paging policy.
+    // Kept separate from the daily reconciler's backoff fields above so a cron
+    // failure does not suppress the bounded customer-facing rescue attempt.
+    // Provider outcomes still update the shared reconciliation bookkeeping;
+    // only request coalescing/cooldown ownership lives in these fields.
     renewalVerificationState: v.optional(v.union(
       v.literal("pending"),
       v.literal("failed"),
@@ -609,6 +610,7 @@ export default defineSchema({
     renewalVerificationAttemptAt: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
+    .index("by_userId_status_currentPeriodEnd", ["userId", "status", "currentPeriodEnd"])
     .index("by_dodoSubscriptionId", ["dodoSubscriptionId"])
     .index("by_dodoCustomerId", ["dodoCustomerId"])
     // Dunning scan (#4932): on_hold is a small TRANSIENT set (tens of rows),

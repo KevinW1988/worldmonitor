@@ -667,21 +667,20 @@ export const claimRecentlyStaleSubscriptionForVerification = internalMutation({
     now: v.number(),
   },
   handler: async (ctx, args): Promise<OnDemandRenewalClaim> => {
+    const recentCutoff = args.now - ON_DEMAND_RENEWAL_RECENT_WINDOW_MS;
     const subscriptions = await ctx.db
       .query("subscriptions")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .withIndex("by_userId_status_currentPeriodEnd", (q) =>
+        q
+          .eq("userId", args.userId)
+          .eq("status", "active")
+          .gte("currentPeriodEnd", recentCutoff)
+          .lt("currentPeriodEnd", args.now),
+      )
       .collect();
 
-    const recentCutoff = args.now - ON_DEMAND_RENEWAL_RECENT_WINDOW_MS;
     let candidate: (typeof subscriptions)[number] | null = null;
     for (const subscription of subscriptions) {
-      if (
-        subscription.status !== "active" ||
-        subscription.currentPeriodEnd >= args.now ||
-        subscription.currentPeriodEnd < recentCutoff
-      ) {
-        continue;
-      }
       if (
         candidate === null ||
         compareEntitlementPlans(
@@ -697,7 +696,11 @@ export const claimRecentlyStaleSubscriptionForVerification = internalMutation({
       // A caller with billing history but no recently-stale active row has no
       // uncertain provider state to verify on the request path. Preserve a
       // definitive lapse signal for corrected inactive rows and old churn.
-      return subscriptions.length > 0 ? { kind: "lapsed" } : { kind: "not_applicable" };
+      const hasBillingHistory = await ctx.db
+        .query("subscriptions")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .first();
+      return hasBillingHistory ? { kind: "lapsed" } : { kind: "not_applicable" };
     }
 
     const attemptedAt = candidate.renewalVerificationAttemptAt;
