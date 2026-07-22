@@ -1,76 +1,93 @@
 ---
-title: "WorldMonitor Is Not Palantir (But Thank You)"
-description: "The Palantir comparison is flattering and wrong: WorldMonitor is an open platform for the world's public data — markets, trade, energy, and economics first — that anyone can use and build on."
-metaTitle: "WorldMonitor Is Not Palantir | World Monitor"
+title: "WorldMonitor Is Not an Open-Source Palantir"
+description: "One command shows the difference: Palantir organizes your institution's private data behind closed deployments. WorldMonitor publishes intelligence on the world's public data — live, free, forkable."
+metaTitle: "WorldMonitor Is Not an Open-Source Palantir | World Monitor"
 keywords: "WorldMonitor vs Palantir, Palantir alternative open source, open intelligence platform, economic intelligence dashboard, global financial data platform, build on intelligence API"
 audience: "Press, analysts, developers, investors, anyone who has seen the Palantir comparison"
 heroImage: "/blog/og/worldmonitor-is-not-palantir.png"
 pubDate: "2026-07-21"
+modifiedDate: "2026-07-22"
 ---
 
-Ever since WorldMonitor started getting attention, one comparison has followed it everywhere: "open-source Palantir." It shows up in press mentions, Reddit threads, and half the introductions supporters write for us.
+Run this in a terminal:
 
-First, sincerely: thank you. When people reach for Palantir as the reference point, they're saying the ambition registers — a live map of the world's data, built by a small team, holding its own next to a company worth hundreds of billions. We'll take that compliment every time.
+```bash
+curl "https://www.worldmonitor.app/api/health?compact=1"
+```
 
-But the comparison is wrong, and the ways it's wrong are exactly the ways WorldMonitor is interesting.
+No API key. No sales call. No contract. Here's what it returned the moment this paragraph was written (July 22, 2026):
 
-## What Palantir actually is
+```json
+{
+  "status": "WARNING",
+  "summary": { "total": 232, "ok": 229, "warn": 2, "onDemandWarn": 1, "crit": 0 },
+  "problems": {
+    "globalTendersSam": { "status": "SEED_ERROR", "records": 77, "seedAgeMin": 355 }
+  }
+}
+```
 
-Palantir builds data-integration software for institutions. Gotham, Foundry, and AIP ingest a customer's *own* data — case files, supply ledgers, sensor logs — into a private ontology that the customer's analysts query behind their own walls. It is excellent at that job. It is also, definitionally, closed: the data is yours, the deployment is yours, and the contract is negotiated.
+That's WorldMonitor monitoring 232 of its own data sources — and publicly reporting, to anyone who asks, that its US government-tenders feed was stale at that moment because SAM.gov was rate-limiting us. We didn't clean that up for this post. The failure report *is* the point.
 
-Palantir doesn't primarily *provide* data. It organizes data you already have.
+Now try getting Palantir to show you anything at all this afternoon.
 
-## What WorldMonitor actually is
+## The comparison we keep getting
 
-WorldMonitor inverts every one of those properties. It's a real-time intelligence layer over the **world's public data** — and it publishes the result to everyone, starting at free with no login.
+There's a third-party explainer of our codebase titled ["worldmonitor: The Open-Source Palantir Running in Your Browser."](https://repo-explainer.com/koala73/worldmonitor) Supporters introduce us the same way. "Open-source Palantir" has become a whole genre — other projects [market themselves with exactly that phrase](https://osirisai.live/). We understand the shorthand: dark map, live data, global scope. One thank-you covers it: when people reach for a $400-billion company as the reference point for a free dashboard, the ambition landed.
 
-And despite the war-room aesthetic, the center of gravity is economic. Look at what the platform actually ships:
+But the comparison mistakes what both things are. And the mistake is worth correcting precisely, because what WorldMonitor actually is turns out to be more useful to more people.
 
-- [92 stock exchanges, 13 central banks, and a 7-signal macro radar](/blog/posts/real-time-market-intelligence-for-traders-and-analysts/) on the finance dashboard
-- [Chokepoints, freight indices, and trade-route monitoring](/blog/posts/tracking-global-trade-routes-chokepoints-freight-costs/) for physical trade
-- [Tariff trends, customs revenue, and trade policy](/blog/posts/tariff-tracker-trade-policy-monitoring-worldmonitor/)
-- [Government tenders from six official procurement sources](/blog/posts/government-tenders-procurement-intelligence-worldmonitor/)
-- [Sanctions designations and country pressure](/blog/posts/monitor-global-sanctions-pressure-worldmonitor/)
-- [Shelf-price inflation tracking](/blog/posts/ground-truth-inflation-shelf-price-tracking-worldmonitor/), commodity markets, energy intelligence, prediction markets, and EU macro series
+## What Palantir is — credit where due
 
-Conflict tracking is real and serious on WorldMonitor — but it's there because **war is an economic event**. Chokepoints close, freight reprices, energy flows shift, currencies move. The conflict layer feeds the economic picture as much as the reverse. "Palantir" pattern-matches to the map with red dots; it misses that most of the platform is telling you what those dots do to prices, routes, and policy.
+Palantir builds data-integration software for institutions. Gotham, Foundry, and AIP take a customer's *own* data — case files, logistics ledgers, sensor logs — and make it queryable inside a private ontology, behind the customer's walls, under a negotiated contract. It is genuinely excellent at that job, which is why institutions pay what they pay.
 
-The scale is public too: [six specialized dashboards](/blog/posts/five-dashboards-one-platform-worldmonitor-variants/), 500+ curated feeds, 56 map layers, and [21 languages](/blog/posts/worldmonitor-in-21-languages-global-intelligence-for-everyone/) — with the [full comparison against Bloomberg, Dataminr, Recorded Future, and yes, Palantir](/blog/posts/worldmonitor-vs-traditional-intelligence-tools/) already written.
+Note what that job is: **Palantir makes your private data usable by you.** It doesn't primarily provide data. If your organization has nothing to integrate, Palantir has nothing to sell you.
 
-## The deeper difference: open, in every direction
+## What WorldMonitor is
 
-The Palantir model is access-gated at every layer. WorldMonitor is open at every layer:
+WorldMonitor inverts every term of that sentence: **it makes the world's public data usable by everyone.** UCDP conflict events, IMF PortWatch ship transits, EIA petroleum stocks, OFAC designations, UNHCR displacement, USGS seismographs, Eurostat series, prediction-market odds, 567 curated news feeds — ingested continuously, classified, mapped, and published to a URL with no login.
 
-- **Open product** — the dashboards are free, no signup, right now.
-- **Open source** — the entire platform is AGPL-3.0. You can [read it, fork it, and self-host it](/blog/posts/self-host-worldmonitor-open-source-osint-dashboard/).
-- **Open interfaces** — a versioned [REST API with typed SDKs](/blog/posts/build-on-worldmonitor-developer-api-open-source/), an [MCP server with 40 live tools for AI agents](/blog/posts/worldmonitor-mcp-server-ai-agents-real-time-intelligence/), and an [embeddable live map](/blog/posts/embed-live-global-map-worldmonitor/).
-- **Open pricing** — published on the site, from $0 to [flat monthly tiers](/blog/posts/free-vs-paid-real-time-intelligence-dashboards/). No sales call.
+And despite the war-room aesthetic that invites the Palantir shorthand, the center of gravity is **economic**. Count the surface: [markets and central-bank trackers](/blog/posts/real-time-market-intelligence-for-traders-and-analysts/), [chokepoints and freight](/blog/posts/tracking-global-trade-routes-chokepoints-freight-costs/), [tariffs and customs revenue](/blog/posts/tariff-tracker-trade-policy-monitoring-worldmonitor/), [government tenders from six official portals](/blog/posts/government-tenders-procurement-intelligence-worldmonitor/), [shelf-price inflation](/blog/posts/ground-truth-inflation-shelf-price-tracking-worldmonitor/), energy intelligence, prediction markets.
 
-That's not a smaller Palantir. It's a different species. If Palantir is a private ontology for your institution's data, WorldMonitor is public infrastructure for the world's data.
+Here's the sanctions layer, queried live while writing this (July 22, 2026): **20,398 active OFAC designations** — 19,345 SDN plus 1,053 consolidated — including 1,517 vessels and 344 aircraft. Russia carries 5,931 country-tagged entries against Iran's 1,607, and the single largest program, `RUSSIA-EO14024`, holds 6,794. That's not a marketing claim about "tracking sanctions." That's the data, and you can pull the same numbers right now through the [MCP server](https://www.worldmonitor.app/docs/mcp-quickstart) or the [API](https://www.worldmonitor.app/docs/api-reference).
 
-## Build on it — that's the point
+Conflict tracking is real and serious on WorldMonitor — but it's there because **war is an economic event**. When Hormuz goes yellow, tankers reroute, freight and insurance reprice, energy flows shift, sanctions programs swell. The red dots matter because of what they do to prices, routes, and policy. Palantir pattern-matches to the map; it misses that most of the platform is telling you what the map costs.
 
-The clearest proof that the comparison fails: you can't build on Palantir this afternoon. You can build on WorldMonitor this afternoon.
+## The structural difference: open at the layers that matter
 
-- Wire a [supply-chain early-warning system](/blog/posts/build-supply-chain-early-warning-system-api/) to chokepoint and disruption data
-- Give Claude or your own agent [live world context through MCP](/blog/posts/build-geopolitical-risk-agent-worldmonitor-mcp/)
-- Pipe [risk alerts into Slack or Teams](/blog/posts/geopolitical-risk-alerts-slack-teams-worldmonitor-api/)
-- Or start from the [API reference](https://www.worldmonitor.app/docs/api-reference) and build the thing we haven't thought of
+- **The product is open**: six dashboards, free, no signup, right now.
+- **The source is open**: the entire platform is AGPL-3.0 — [read it, fork it, self-host it](/blog/posts/self-host-worldmonitor-open-source-osint-dashboard/).
+- **The interfaces are open**: a versioned REST API built on 35 typed proto services, an [MCP server with 41 tools](/blog/posts/worldmonitor-mcp-server-ai-agents-real-time-intelligence/) that answers anonymous connections, an [embeddable live map](/blog/posts/embed-live-global-map-worldmonitor/), 25 UI languages.
+- **The pricing is open**: [published on the site](/blog/posts/free-vs-paid-real-time-intelligence-dashboards/), $0 to flat monthly tiers, no "contact sales."
+
+And, in fairness, what WorldMonitor is **not**: it is not fully free at every layer — a handful of compute-heavy panels (the AI analyst, the Scenario Engine, tender search, trade policy) are paid, and they fund the free rest. It has no classified feeds and no private ontology for your internal data — if you need *your* data integrated, that's genuinely Palantir's job, not ours. And public data has gaps; where sensors don't exist, WorldMonitor shows the gap rather than interpolating confidence.
+
+That last habit is the deepest difference. A closed platform's failures are private. Ours are on the health endpoint you curled above.
+
+## Build on it this afternoon — literally
+
+The claim "you can build on it" is cheap, so here is the afternoon, itemized:
+
+1. **Minute 1:** `curl "https://www.worldmonitor.app/api/health?compact=1"` — you did this already.
+2. **Minute 5:** Add `https://worldmonitor.app/mcp` to Claude or any MCP client — the server accepts anonymous connections with a daily quota, no account — and ask *"what's the chokepoint status in Hormuz right now?"*
+3. **The rest of the afternoon:** wire a [supply-chain early-warning pipeline](/blog/posts/build-supply-chain-early-warning-system-api/), pipe [risk alerts into Slack](/blog/posts/geopolitical-risk-alerts-slack-teams-worldmonitor-api/), or [give your agent live world context](/blog/posts/build-geopolitical-risk-agent-worldmonitor-mcp/) — or fork the repo and change what you don't like.
+
+Palantir is excellent software you cannot try this afternoon. That's not a criticism — it's a different species of thing. But it's why the comparison fails in our favor for everyone who isn't a government or a Fortune 100.
 
 ## Frequently Asked Questions
 
 **Is WorldMonitor a Palantir alternative?**
 
-For integrating your institution's private data into a closed ontology — no, and it doesn't try to be. For real-time intelligence over public data — markets, trade, conflicts, energy, economics — it does something Palantir doesn't sell at any price: it's open, and it starts free.
+For integrating your institution's private data into a closed ontology — no, and it doesn't try to be. For real-time intelligence over public data — markets, trade, conflicts, energy, sanctions — it does something Palantir doesn't sell at any price: it's live in your browser right now, free, with the source published.
 
 **Is WorldMonitor a defense or war-focused platform?**
 
-No. Conflict monitoring is one layer among dozens; by surface area, most of the platform is financial, economic, and trade intelligence. War matters on WorldMonitor because it reprices the world, not because it's the product.
+No. Conflict monitoring is one layer among dozens; by surface area most of the platform is financial, economic, and trade intelligence. War matters on WorldMonitor because it reprices the world — which is why traders and supply-chain teams read it alongside OSINT analysts.
 
-**Can I build a commercial product on WorldMonitor?**
+**Is everything really free?**
 
-Yes — through the API tiers, with the open-source core available under AGPL-3.0 obligations if you self-host. The [developer platform overview](/blog/posts/build-on-worldmonitor-developer-api-open-source/) covers both paths.
+The dashboards, the map layers, the briefs, and anonymous MCP access are free with no login. A few compute-heavy features (AI analyst, Scenario Engine, tender search, trade policy) are paid and fund the rest. The source is AGPL-3.0 — self-hosters get everything their own keys can feed.
 
 ---
 
-**Keep the comparisons coming — we're grateful for every one. Just know the real story is better: not a private war room for the few, but open economic intelligence for anyone who wants it.**
+**Palantir helps institutions see what they already own. WorldMonitor helps anyone see what the world is already saying — and you're one `curl` away from checking that claim yourself.**

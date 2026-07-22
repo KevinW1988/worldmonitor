@@ -6,6 +6,7 @@ keywords: "real time radiation map, radiation levels live, nuclear radiation mon
 audience: "OSINT analysts, journalists, researchers, emergency-preparedness planners, concerned readers during nuclear events"
 heroImage: "/blog/og/real-time-radiation-monitoring-radnet-safecast.png"
 pubDate: "2026-07-21"
+modifiedDate: "2026-07-22"
 ---
 
 Every nuclear scare follows the same script. An incident at a plant, shelling near a reactor, a test rumor — and within an hour, social media fills with screenshots of dosimeters, decade-old maps, and numbers with no units. Radiation is uniquely suited to panic because it's invisible, poorly understood, and genuinely serious when real.
@@ -22,6 +23,18 @@ The radiation layer merges two complementary systems:
 The merge is deliberate. Official networks are trustworthy but geographically bounded; Safecast reaches places no government feed covers. Each observation keeps its source attribution, so you always know whether you're reading a federal station or a community sensor.
 
 Readings appear in the **Radiation Watch panel** and on the **radiation map layer** — and the map gives them context that a standalone radiation site can't: **nuclear facilities** and **IAEA-listed gamma irradiator** locations as reference layers, plus conflicts, fires, and weather on the same canvas. A radiation question is never just "what's the reading?" — it's "what's the reading, where, relative to what, and which way does the wind blow?"
+
+## What the network read while this was written
+
+Pulled live from the merged feed on July 22, 2026:
+
+| Station | Reading | Its own baseline | Deviation | Verdict |
+|---|---|---|---|---|
+| Honolulu (EPA RadNet) | 28 nSv/h | 27.8 | +0.2 (z = 0.2) | normal |
+| Seattle (EPA RadNet) | 27 nSv/h | 26.9 | +0.1 (z = 0.1) | normal |
+| Houston (EPA RadNet) | 39 nSv/h | 36.4 | +2.6 (z = 1.8) | normal |
+
+The Houston row is the whole lesson in one line. Its 39 nSv/h is forty percent "hotter" than Seattle — and completely normal, because Houston's own baseline runs high. Someone screenshotting absolute numbers would call that a story; the z-score says it's a Tuesday. Every observation in the feed carries exactly this context: source attribution, freshness, the station's own baseline, a z-score, and a severity classification — so "elevated" means elevated *for that place*, not elevated compared to a city with different geology.
 
 ## How to read a radiation event
 
