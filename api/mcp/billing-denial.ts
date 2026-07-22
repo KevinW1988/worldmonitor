@@ -1,0 +1,76 @@
+// #4770 review: billing-verification denials from the gateway must survive the
+// tool `_execute` fetch layer. Without this, a mid-request entitlement lapse
+// (gateway 403/503 with X-Billing-Verification) is flattened by dispatch's
+// catch-all into HTTP 200 / -32603 "Internal error: data fetch failed" — the
+// agent loses the retry/billing signal for exactly the window the on-demand
+// renewal verification exists to cover.
+
+export type BillingVerificationCode =
+  | 'subscription_lapsed'
+  | 'renewal_verification_pending'
+  | 'renewal_verification_failed';
+
+const BILLING_VERIFICATION_CODES: ReadonlySet<string> = new Set([
+  'subscription_lapsed',
+  'renewal_verification_pending',
+  'renewal_verification_failed',
+] satisfies BillingVerificationCode[]);
+
+export class BillingDenialError extends Error {
+  readonly status: number;
+  readonly billingCode: BillingVerificationCode;
+  readonly retryAfterSeconds: number | undefined;
+
+  constructor(
+    label: string,
+    status: number,
+    billingCode: BillingVerificationCode,
+    retryAfterSeconds: number | undefined,
+  ) {
+    // Keep the `<tool> HTTP <status>` shape: dispatch's log-severity downgrade
+    // for expected 4xx keys on this message format.
+    super(`${label} HTTP ${status} (${billingCode})`);
+    this.name = 'BillingDenialError';
+    this.status = status;
+    this.billingCode = billingCode;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+// Structural subset of Response so test doubles that stub only {ok, status}
+// (several suites do) pass through the non-billing path instead of throwing
+// on a missing headers object.
+type ToolFetchResponse = {
+  ok: boolean;
+  status: number;
+  headers?: { get(name: string): string | null };
+};
+
+/**
+ * Throws BillingDenialError when a non-ok gateway response carries the
+ * billing-verification marker header. Detection is header-only, so callers
+ * that read the error body for detail can still consume it afterwards.
+ */
+export function throwIfBillingDenial(response: ToolFetchResponse, label: string): void {
+  if (response.ok) return;
+  const marker = response.headers?.get('X-Billing-Verification');
+  if (!marker || !BILLING_VERIFICATION_CODES.has(marker)) return;
+  const rawRetryAfter = Number(response.headers?.get('Retry-After'));
+  throw new BillingDenialError(
+    label,
+    response.status,
+    marker as BillingVerificationCode,
+    Number.isFinite(rawRetryAfter) ? rawRetryAfter : undefined,
+  );
+}
+
+/**
+ * Standard non-ok handling for tool `_execute` gateway fetches: billing
+ * denials become typed errors dispatch can re-emit faithfully; everything
+ * else keeps the existing `<label> HTTP <status>` Error contract.
+ */
+export function assertToolFetchOk(response: ToolFetchResponse, label: string): void {
+  if (response.ok) return;
+  throwIfBillingDenial(response, label);
+  throw new Error(`${label} HTTP ${response.status}`);
+}

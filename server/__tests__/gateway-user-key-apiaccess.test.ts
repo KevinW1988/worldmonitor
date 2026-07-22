@@ -74,6 +74,7 @@ let entitlement: Ent = ACTIVE;
 const requiredTiers = new Map<string, number>();
 const entitlementsByUser = new Map<string, Ent>();
 const getEntitlements = vi.fn(async (userId: string) => entitlementsByUser.get(userId) ?? entitlement);
+let entitlementBackendConfigured = true;
 vi.mock("../_shared/entitlement-check", async (importActual) => {
   const actual = await importActual<typeof import("../_shared/entitlement-check")>();
   return {
@@ -82,6 +83,7 @@ vi.mock("../_shared/entitlement-check", async (importActual) => {
     checkEntitlement: vi.fn().mockResolvedValue(null),
     checkEntitlementDetailed: vi.fn().mockResolvedValue({ response: null, entitlements: null }),
     getEntitlements: (...a: unknown[]) => getEntitlements(...a),
+    isEntitlementBackendConfigured: () => entitlementBackendConfigured,
   };
 });
 
@@ -156,6 +158,7 @@ beforeEach(() => {
   getEntitlements.mockClear();
   resolveClerkSession.mockClear();
   validateBearerToken.mockClear();
+  entitlementBackendConfigured = true;
   validateUserApiKey.mockClear().mockResolvedValue({ userId: "acct_lapsed", keyId: "k1", name: "t" });
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -286,6 +289,24 @@ describe("#4611 — expired wm_ key rejected on all route classes", () => {
     expect(await res.json()).toMatchObject({ code: "entitlement_verification_unavailable" });
     expect(checkBurst).not.toHaveBeenCalled();
     expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  test("null entitlement with UNCONFIGURED backend → fail-open 200 (deploy defect, not billing state)", async () => {
+    entitlement = null;
+    entitlementBackendConfigured = false;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
+      // Missing CONVEX_SITE_URL / shared secret means NO lookup could ever
+      // succeed: 503ing here would turn a config regression into a fleet-wide
+      // outage for every wm_ key. Serve (pre-#4770 posture) and log loudly.
+      expect(res.status).toBe(200);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("entitlement backend unconfigured"),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   // --- active subscription unaffected --------------------------------------

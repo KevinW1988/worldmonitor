@@ -154,20 +154,28 @@ export function wwwAuthHeader(resourceMetadataUrl: string, errorParam = ''): str
   return `Bearer realm="worldmonitor"${errSegment}, resource_metadata="${resourceMetadataUrl}"`;
 }
 
-function getMcpBillingVerificationDenial(
-  entitlements: Awaited<ReturnType<McpHandlerDeps['getEntitlements']>>,
+export function getMcpBillingVerificationDenial(
+  entitlements: {
+    billingStatus?:
+      | 'subscription_lapsed'
+      | 'renewal_verification_pending'
+      | 'renewal_verification_failed';
+    retryAfterSeconds?: number;
+  } | null | undefined,
   corsHeaders: Record<string, string>,
+  id: unknown = null,
 ): Response | null {
   // The shared helper owns status, retry normalization, no-store, and billing
-  // headers. Its parameter asks only for the billing fields, so the narrower
-  // McpHandlerDeps entitlement shape is directly assignable.
+  // headers. Its parameter asks only for the billing fields, so both the
+  // McpHandlerDeps entitlement shape and dispatch's synthesized
+  // BillingDenialError shape are directly assignable.
   const denial = getBillingVerificationDenial(entitlements, corsHeaders);
   const billingStatus = entitlements?.billingStatus;
   if (!denial || !billingStatus) return null;
 
   const retryable = denial.status === 503;
   const message = {
-    subscription_lapsed: 'Subscription lapsed.',
+    subscription_lapsed: 'Subscription lapsed. Re-authenticating will not help — resubscribe to restore access.',
     renewal_verification_pending: 'Renewal verification pending. Retry shortly.',
     renewal_verification_failed: 'Renewal verification failed. Retry shortly.',
   }[billingStatus];
@@ -178,9 +186,13 @@ function getMcpBillingVerificationDenial(
   return new Response(
     JSON.stringify({
       jsonrpc: '2.0',
-      id: null,
+      id: id ?? null,
       error: {
-        code: retryable ? -32603 : -32001,
+        // -32002 is the confirmed-lapse code (HTTP 403, no WWW-Authenticate).
+        // -32001 stays reserved for authentication failures at HTTP 401 per
+        // docs/mcp-error-catalog.mdx — reusing it here sent doc-following
+        // agents into a pointless OAuth re-auth loop.
+        code: retryable ? -32603 : -32002,
         message,
         data: { code: billingStatus },
       },

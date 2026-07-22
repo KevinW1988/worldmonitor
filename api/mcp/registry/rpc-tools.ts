@@ -4,6 +4,7 @@ import MINING_SITES_RAW from '../../../shared/mining-sites.js';
 // @ts-expect-error — JS module, no declaration file
 import { readJsonFromUpstash } from '../../_upstash-json.js';
 import { buildAuthHeaders } from '../auth';
+import { assertToolFetchOk, throwIfBillingDenial } from '../billing-denial';
 import { SUPPORTED_CONSUMER_PRICES_COUNTRIES } from '../constants';
 import { evaluateFreshness } from '../freshness';
 import type { FreshnessCheck, ToolDef } from '../types';
@@ -249,7 +250,7 @@ export const RPC_TOOLS: ToolDef[] = [
         headers: { ...auth, 'User-Agent': 'worldmonitor-mcp-edge/1.0' },
         signal: AbortSignal.timeout(8_000),
       });
-      if (!response.ok) throw new Error(`list-global-tenders HTTP ${response.status}`);
+      assertToolFetchOk(response, 'list-global-tenders');
       const result = await response.json() as ProcurementRouteResponse;
       return {
         opportunities: (result.tenders || []).map(compactProcurementOpportunity),
@@ -318,7 +319,7 @@ export const RPC_TOOLS: ToolDef[] = [
         headers: { ...digestAuth, 'User-Agent': UA },
         signal: AbortSignal.timeout(6_000),
       });
-      if (!digestRes.ok) throw new Error(`feed-digest HTTP ${digestRes.status}`);
+      assertToolFetchOk(digestRes, 'feed-digest');
       type DigestPayload = { categories?: Record<string, { items?: DigestItemForBrief[] }> };
       const digest = await digestRes.json() as DigestPayload;
       // Pair headlines with their RSS snippets so the LLM grounds per-story
@@ -355,7 +356,7 @@ export const RPC_TOOLS: ToolDef[] = [
         body: briefBody,
         signal: AbortSignal.timeout(18_000),
       });
-      if (!briefRes.ok) throw new Error(`summarize-article HTTP ${briefRes.status}`);
+      assertToolFetchOk(briefRes, 'summarize-article');
       const result = await briefRes.json() as Record<string, unknown>;
       return { ...result, headlines, sources };
     },
@@ -457,6 +458,7 @@ export const RPC_TOOLS: ToolDef[] = [
         signal: AbortSignal.timeout(22_000),
       });
       if (!res.ok) {
+        throwIfBillingDenial(res, 'get-country-intel-brief');
         // Surface the gateway's error code in the thrown message so Sentry
         // groups the failure by root cause, not just status. Body reads are
         // best-effort; a read failure must not mask the HTTP status.
@@ -530,7 +532,7 @@ export const RPC_TOOLS: ToolDef[] = [
         headers: { ...auth, 'User-Agent': 'worldmonitor-mcp-edge/1.0' },
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok) throw new Error(`get-country-risk HTTP ${res.status}`);
+      assertToolFetchOk(res, 'get-country-risk');
       return res.json();
     },
     _apiPaths: [
@@ -874,6 +876,7 @@ export const RPC_TOOLS: ToolDef[] = [
         signal: AbortSignal.timeout(8_000),
       });
       if (!res.ok) {
+        throwIfBillingDenial(res, 'get-vessel-snapshot');
         const detail = (await res.text().catch(() => '')).slice(0, 200);
         throw new Error(`get-vessel-snapshot HTTP ${res.status}${detail ? ` — ${detail}` : ''}`);
       }
@@ -967,7 +970,7 @@ export const RPC_TOOLS: ToolDef[] = [
         body,
         signal: AbortSignal.timeout(25_000),
       });
-      if (!res.ok) throw new Error(`deduct-situation HTTP ${res.status}`);
+      assertToolFetchOk(res, 'deduct-situation');
       return res.json();
     },
     _apiPaths: [
@@ -1010,7 +1013,7 @@ export const RPC_TOOLS: ToolDef[] = [
         body,
         signal: AbortSignal.timeout(25_000),
       });
-      if (!res.ok) throw new Error(`get-forecasts HTTP ${res.status}`);
+      assertToolFetchOk(res, 'get-forecasts');
       return res.json();
     },
     _apiPaths: [],
@@ -1073,7 +1076,7 @@ export const RPC_TOOLS: ToolDef[] = [
         headers: { ...auth, 'User-Agent': 'worldmonitor-mcp-edge/1.0' },
         signal: AbortSignal.timeout(25_000),
       });
-      if (!res.ok) throw new Error(`search-google-flights HTTP ${res.status}`);
+      assertToolFetchOk(res, 'search-google-flights');
       return res.json();
     },
     _apiPaths: [
@@ -1131,7 +1134,7 @@ export const RPC_TOOLS: ToolDef[] = [
         headers: { ...auth, 'User-Agent': 'worldmonitor-mcp-edge/1.0' },
         signal: AbortSignal.timeout(25_000),
       });
-      if (!res.ok) throw new Error(`search-google-dates HTTP ${res.status}`);
+      assertToolFetchOk(res, 'search-google-dates');
       return res.json();
     },
     _apiPaths: [

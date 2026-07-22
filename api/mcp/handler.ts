@@ -313,7 +313,7 @@ async function handleAuthenticatedSseReplay(
   setUsageContext(usage, auth.context);
   const getPreCheck = await runContextPreChecks(auth.context, deps, resourceMetadataUrl, corsHeaders, ctx);
   if (getPreCheck) {
-    usage.phase = 'precheck';
+    usage.phase = getPreCheck.headers.get('X-Billing-Verification') ? 'billing' : 'precheck';
     return getPreCheck;
   }
   const getLimited = await applyPerMinuteLimit(auth.context, corsHeaders);
@@ -671,7 +671,7 @@ async function mcpHandlerInner(
     setUsageContext(usage, context);
     const preCheck = await runContextPreChecks(context, deps, resourceMetadataUrl, corsHeaders, ctx);
     if (preCheck) {
-      usage.phase = 'precheck';
+      usage.phase = preCheck.headers.get('X-Billing-Verification') ? 'billing' : 'precheck';
       return preCheck;
     }
     const limited = await applyPerMinuteLimit(context, corsHeaders);

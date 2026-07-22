@@ -18,7 +18,13 @@ const USER_KEY_NEGATIVE_CACHE_TTL_SECONDS = 60;
 const USER_KEY_CACHE_PREFIX = 'user-api-key:';
 const BOOTSTRAP_USER_KEY_NEGATIVE_CACHE_PREFIX = 'bootstrap-user-api-key-invalid:';
 const ENTITLEMENT_CACHE_TTL_SECONDS = 900;
-const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 60;
+// Mirrors server/_shared/entitlement-check.ts (this .js file cannot import the
+// .ts module under node --test): lapsed markers stay short because their TTL
+// is the worst-case wrongful-denial window; not_applicable markers stay long
+// because syncEntitlementCache unconditionally overwrites the key on any tier
+// change.
+const LAPSED_BILLING_MARKER_TTL_SECONDS = 60;
+const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 300;
 const ENTITLEMENT_ENV_PREFIX = process.env.DODO_PAYMENTS_ENVIRONMENT === 'live_mode' ? 'live' : 'test';
 const NEG_SENTINEL = '__WM_NEG__';
 
@@ -316,7 +322,7 @@ function notApplicableVerificationTtlSeconds(value) {
 
 function entitlementCacheTtlSeconds(value) {
   const status = value?.billingStatus;
-  if (status === 'subscription_lapsed') return 300;
+  if (status === 'subscription_lapsed') return LAPSED_BILLING_MARKER_TTL_SECONDS;
   if (status === 'renewal_verification_pending' || status === 'renewal_verification_failed') {
     return clampRetryAfterSeconds(value?.retryAfterSeconds);
   }

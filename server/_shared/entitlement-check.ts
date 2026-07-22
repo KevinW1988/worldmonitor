@@ -131,8 +131,30 @@ const ENV_PREFIX = process.env.DODO_PAYMENTS_ENVIRONMENT === 'live_mode' ? 'live
 
 // Cache TTL: 15 min — short enough that subscription expiry is reflected promptly (P2-5)
 const ENTITLEMENT_CACHE_TTL_SECONDS = 900;
-const LAPSED_BILLING_MARKER_TTL_SECONDS = 300;
-const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 60;
+// Hard-403 markers are served for their FULL Redis TTL with no Convex
+// fallback, so this TTL is also the worst-case wrongful-denial window when a
+// stale marker write races a renewal webhook. Keep it short: the row-level
+// 5-min lapsed cooldown (billing.ts) already suppresses Dodo calls, so the
+// only cost of a short marker is ~1 cheap Convex round-trip per minute per
+// actively-retrying lapsed user.
+const LAPSED_BILLING_MARKER_TTL_SECONDS = 60;
+// No-billing-history is structurally invariant while tier stays 0, and every
+// tier-changing write path unconditionally overwrites this cache key via
+// syncEntitlementCache — so a longer marker cannot delay a new subscription
+// from taking effect. 300s keeps the never-subscribed cohort (the bulk of
+// tier-0 traffic) off the action/claim path instead of re-running it every
+// minute.
+const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 300;
+
+/**
+ * True when the Convex entitlement backend is reachable in principle. Callers
+ * that fail closed on a null entitlement use this to distinguish a genuine
+ * verification failure (fail closed) from a deploy misconfiguration where no
+ * lookup could ever succeed (fail open + page).
+ */
+export function isEntitlementBackendConfigured(): boolean {
+  return Boolean(process.env.CONVEX_SITE_URL && getConvexSharedSecret());
+}
 
 function clampRetryAfterSeconds(raw: number | undefined): number {
   return Number.isFinite(raw)

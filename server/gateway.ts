@@ -33,6 +33,7 @@ import {
   getBillingVerificationDenial,
   getRequiredTier,
   getEntitlements,
+  isEntitlementBackendConfigured,
   type CachedEntitlements,
 } from './_shared/entitlement-check';
 import { resolveClerkSession } from './_shared/auth-session';
@@ -1223,27 +1224,34 @@ export function createDomainGateway(
       // A validated wm_ key proves key ownership, not current paid access.
       // getEntitlements() returns null for a missing row and for bounded
       // verification failures/timeouts, so allowing null would turn a billing
-      // backend timeout into paid API access. Fail closed with a retryable 503;
-      // only an affirmative, current apiAccess entitlement may proceed.
+      // backend timeout into paid API access. Fail closed with a retryable 503
+      // — EXCEPT when the entitlement backend itself is unconfigured: that is
+      // a deploy defect, not customer billing state, and 503ing every wm_ key
+      // fleet-wide would convert a config regression into a total API outage.
+      // Misconfig serves fail-open (pre-#4770 behavior) and logs loudly.
       if (!userKeyEntitlement) {
-        emitRequest(503, 'billing_verification_503', null);
-        return new Response(
-          JSON.stringify({
-            error: 'Unable to verify API access',
-            code: 'entitlement_verification_unavailable',
-          }),
-          {
-            status: 503,
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json',
-              'Cache-Control': 'no-store',
-              'Retry-After': '5',
+        if (isEntitlementBackendConfigured()) {
+          emitRequest(503, 'billing_verification_503', null);
+          return new Response(
+            JSON.stringify({
+              error: 'Unable to verify API access',
+              code: 'entitlement_verification_unavailable',
+            }),
+            {
+              status: 503,
+              headers: {
+                ...corsHeaders,
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-store',
+                'Retry-After': '5',
+              },
             },
-          },
+          );
+        }
+        console.error(
+          '[gateway] entitlement backend unconfigured (CONVEX_SITE_URL / shared secret missing) — serving wm_-key request fail-open',
         );
-      }
-      if (
+      } else if (
         !userKeyEntitlement.features.apiAccess ||
         userKeyEntitlement.validUntil < Date.now()
       ) {

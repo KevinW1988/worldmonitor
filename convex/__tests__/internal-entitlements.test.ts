@@ -138,7 +138,7 @@ describe("/api/internal-entitlements HTTP action", () => {
     expect(await res.json()).toMatchObject({
       planKey: "free",
       billingStatus: "renewal_verification_pending",
-      retryAfterSeconds: 15,
+      retryAfterSeconds: 3,
     });
   });
 

@@ -115,6 +115,12 @@ const ON_DEMAND_RENEWAL_TIMEOUT_MS = 2_000;
 // instances. It exceeds the provider timeout so a second request observes
 // `pending` while the first owns the lookup.
 const ON_DEMAND_RENEWAL_LEASE_MS = 15_000;
+// Concurrent waiters retry against the leader's EXPECTED completion (provider
+// timeout + Convex overhead), not the full lease: the lease is a crash-safety
+// bound, and quoting it as Retry-After made a waiting paid client sit out 15s
+// for a lookup that resolves in 2-3s. A stuck leader just means a few 1s polls
+// until the lease reopens.
+const ON_DEMAND_RENEWAL_EXPECTED_COMPLETION_MS = ON_DEMAND_RENEWAL_TIMEOUT_MS + 1_000;
 // Transient failures are retryable, but no more than once per minute per
 // subscription. The response carries the remaining cooldown to callers.
 const ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS = 60_000;
@@ -728,7 +734,10 @@ function selectOnDemandRenewalCandidate<T extends OnDemandRenewalCandidate>(
       if (elapsed < ON_DEMAND_RENEWAL_LEASE_MS) {
         return {
           kind: "pending",
-          retryAfterSeconds: retryAfterSeconds(ON_DEMAND_RENEWAL_LEASE_MS, elapsed),
+          retryAfterSeconds: retryAfterSeconds(
+            ON_DEMAND_RENEWAL_EXPECTED_COMPLETION_MS,
+            elapsed,
+          ),
         };
       }
     }

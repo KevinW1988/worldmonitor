@@ -129,6 +129,11 @@ export function isNewerEvent(
   return incomingTimestamp > existingUpdatedAt;
 }
 
+// Delay for the second, race-covering entitlement cache sync (#4770 review):
+// must exceed the longest edge request that could hold a pre-write Convex read
+// (3s entitlement fetch budget, 8s tool fetch timeouts) with margin.
+const ENTITLEMENT_CACHE_RESYNC_DELAY_MS = 15_000;
+
 /**
  * Creates or updates the entitlements record for a given user.
  * Only one entitlement row exists per userId (upsert semantics).
@@ -186,6 +191,17 @@ export async function upsertEntitlements(
   if (process.env.UPSTASH_REDIS_REST_URL) {
     await ctx.scheduler.runAfter(
       0,
+      internal.payments.cacheActions.syncEntitlementCache,
+      { userId, planKey, features, validUntil },
+    );
+    // #4770 review: a request that read Convex BEFORE this write can still be
+    // in flight and will write its stale billing-denial marker to the same
+    // Redis key AFTER the sync above (bare SET, last-writer-wins, no version
+    // guard). Edge requests are bounded well under this delay, so a second
+    // sync overwrites any such late marker instead of letting it deny a
+    // just-renewed user until its TTL expires.
+    await ctx.scheduler.runAfter(
+      ENTITLEMENT_CACHE_RESYNC_DELAY_MS,
       internal.payments.cacheActions.syncEntitlementCache,
       { userId, planKey, features, validUntil },
     );

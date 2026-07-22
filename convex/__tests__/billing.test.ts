@@ -9,6 +9,7 @@ import {
   STUCK_PAYMENT_RECONCILIATION_THRESHOLD_MS,
   safeMarkReconcileAttempt,
 } from "../payments/billing";
+import { upsertEntitlements } from "../payments/subscriptionHelpers";
 import { getFeaturesForPlan } from "../lib/entitlements";
 import { signAnonClaimToken } from "../lib/identitySigning";
 
@@ -4049,7 +4050,7 @@ describe("payments billing missed renewal reconciliation", () => {
         { userId: TEST_USER_ID, now: NOW + 1_000 },
       );
 
-      expect(claim).toEqual({ kind: "pending", retryAfterSeconds: 14 });
+      expect(claim).toEqual({ kind: "pending", retryAfterSeconds: 2 });
       expect((await t.run((ctx) => ctx.db.get(strongerId)))?.renewalVerificationState).toBeUndefined();
     });
 
@@ -4188,6 +4189,34 @@ describe("payments billing missed renewal reconciliation", () => {
       expect(result).toEqual({ status: "subscription_lapsed" });
       expect((await readSub(t, "on_demand_lapsed_cooldown"))?.currentPeriodEnd).toBe(NOW - DAY_MS);
       expect((await readSub(t, "on_demand_lapsed_cooldown"))?.renewalVerificationState).toBe("lapsed");
+    });
+  });
+
+  describe("entitlement cache re-sync (#4770 marker race)", () => {
+    test("schedules an immediate and a delayed cache sync when Redis is configured", async () => {
+      const t = convexTest(schema, modules);
+      vi.stubEnv("UPSTASH_REDIS_REST_URL", "https://upstash.test");
+      try {
+        await t.run(async (ctx) => {
+          await upsertEntitlements(ctx, TEST_USER_ID, "pro_monthly", NOW + 30 * DAY_MS, NOW);
+        });
+
+        const scheduled = await t.run((ctx) =>
+          ctx.db.system.query("_scheduled_functions").collect(),
+        );
+        const syncs = scheduled
+          .filter((job) => job.name.includes("syncEntitlementCache"))
+          .sort((a, b) => a.scheduledTime - b.scheduledTime);
+
+        // The delayed second sync overwrites any stale billing-denial marker a
+        // still-in-flight request writes AFTER the immediate sync (bare SET,
+        // last-writer-wins) — without it a just-renewed user can be re-denied
+        // until the marker TTL expires.
+        expect(syncs).toHaveLength(2);
+        expect(syncs[1].scheduledTime - syncs[0].scheduledTime).toBe(15_000);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
   });
 });
