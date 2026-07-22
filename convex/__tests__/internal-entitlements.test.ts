@@ -2,8 +2,10 @@ import { convexTest } from "convex-test";
 import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
 import schema from "../schema";
 import { internal } from "../_generated/api";
+import type { ActionCtx } from "../_generated/server";
 import { PRODUCT_CATALOG } from "../config/productCatalog";
 import { getFeaturesForPlan } from "../lib/entitlements";
+import { internalEntitlementsHttpHandler } from "../http";
 
 const modules = import.meta.glob("../**/*.ts");
 
@@ -47,8 +49,56 @@ describe("/api/internal-entitlements HTTP action", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { planKey: string };
+    const body = (await res.json()) as {
+      planKey: string;
+      renewalVerificationFreshness?: {
+        status: string;
+        checkedAt: number;
+      };
+    };
     expect(body.planKey).toBe("free");
+    expect(body.renewalVerificationFreshness).toEqual({
+      status: "not_applicable",
+      checkedAt: NOW,
+    });
+  });
+
+  test("a concurrent paid refresh wins over a non-active verification result", async () => {
+    const free = {
+      planKey: "free",
+      features: getFeaturesForPlan("free"),
+      validUntil: 0,
+    };
+    const active = {
+      planKey: "pro_monthly",
+      features: getFeaturesForPlan("pro_monthly"),
+      validUntil: NOW + 30 * DAY_MS,
+    };
+    const runQuery = vi.fn()
+      .mockResolvedValueOnce(free)
+      .mockResolvedValueOnce(active);
+    const runAction = vi.fn().mockResolvedValue({
+      status: "renewal_verification_failed",
+      retryAfterSeconds: 12,
+    });
+
+    const res = await internalEntitlementsHttpHandler(
+      { runQuery, runAction } as unknown as ActionCtx,
+      new Request("https://example.convex.site/api/internal-entitlements", {
+        method: "POST",
+        headers: validHeaders(),
+        body: JSON.stringify({ userId: USER_A }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject(active);
+    expect(body).not.toHaveProperty("billingStatus");
+    expect(body).not.toHaveProperty("retryAfterSeconds");
+    expect(body).not.toHaveProperty("renewalVerificationFreshness");
+    expect(runQuery).toHaveBeenCalledTimes(2);
+    expect(runAction).toHaveBeenCalledTimes(1);
   });
 
   test("recently stale verification lease surfaces renewal_verification_pending", async () => {

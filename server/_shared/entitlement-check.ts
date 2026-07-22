@@ -50,6 +50,10 @@ export interface CachedEntitlements {
     | 'renewal_verification_pending'
     | 'renewal_verification_failed';
   retryAfterSeconds?: number;
+  renewalVerificationFreshness?: {
+    status: 'not_applicable';
+    checkedAt: number;
+  };
 }
 
 export interface EntitlementCheckResult {
@@ -128,6 +132,7 @@ const ENV_PREFIX = process.env.DODO_PAYMENTS_ENVIRONMENT === 'live_mode' ? 'live
 // Cache TTL: 15 min — short enough that subscription expiry is reflected promptly (P2-5)
 const ENTITLEMENT_CACHE_TTL_SECONDS = 900;
 const LAPSED_BILLING_MARKER_TTL_SECONDS = 300;
+const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 60;
 
 function isBillingVerificationStatus(
   value: unknown,
@@ -146,6 +151,32 @@ function billingMarkerTtlSeconds(entitlements: CachedEntitlements): number | nul
   return Number.isFinite(retryAfter)
     ? Math.max(1, Math.min(60, Math.ceil(retryAfter!)))
     : 5;
+}
+
+function notApplicableVerificationTtlSeconds(
+  entitlements: CachedEntitlements,
+): number | null {
+  const marker = entitlements.renewalVerificationFreshness;
+  if (
+    marker?.status !== 'not_applicable'
+    || !Number.isFinite(marker.checkedAt)
+  ) {
+    return null;
+  }
+  const remainingMs = marker.checkedAt
+    + NOT_APPLICABLE_VERIFICATION_TTL_SECONDS * 1_000
+    - Date.now();
+  return remainingMs > 0
+    ? Math.max(1, Math.min(
+      NOT_APPLICABLE_VERIFICATION_TTL_SECONDS,
+      Math.ceil(remainingMs / 1_000),
+    ))
+    : null;
+}
+
+function entitlementMarkerTtlSeconds(entitlements: CachedEntitlements): number | null {
+  return billingMarkerTtlSeconds(entitlements)
+    ?? notApplicableVerificationTtlSeconds(entitlements);
 }
 
 // ---------------------------------------------------------------------------
@@ -192,7 +223,7 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
       // Verification markers have their own short Redis TTL. Serve them even
       // though validUntil is expired so cooldown requests stop at Redis instead
       // of repeating the Convex action/claim chain.
-      if (billingMarkerTtlSeconds(ent) !== null) return ent;
+      if (entitlementMarkerTtlSeconds(ent) !== null) return ent;
       // Only use cached data if it hasn't expired AND has the post-U10 shape.
       //
       // Legacy cache entries written before plan 2026-05-10-001 U10 lack the
@@ -250,7 +281,7 @@ async function _getEntitlementsImpl(userId: string): Promise<CachedEntitlements 
         await setCachedJson(
           `entitlements:${ENV_PREFIX}:${userId}`,
           result,
-          billingMarkerTtlSeconds(result) ?? ENTITLEMENT_CACHE_TTL_SECONDS,
+          entitlementMarkerTtlSeconds(result) ?? ENTITLEMENT_CACHE_TTL_SECONDS,
           true,
         );
       } catch (cacheErr) {

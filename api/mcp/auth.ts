@@ -10,7 +10,11 @@ import { getClientIp } from '../_client-ip.js';
 import { captureSilentError } from '../_sentry-edge.js';
 // @ts-expect-error — JS module, no declaration file
 import { redisPipeline as rawRedisPipeline } from '../_upstash-json.js';
-import { getEntitlements } from '../../server/_shared/entitlement-check';
+import {
+  getBillingVerificationDenial,
+  getEntitlements,
+  type CachedEntitlements,
+} from '../../server/_shared/entitlement-check';
 import {
   buildInternalMcpHeaders,
   signInternalMcpRequest,
@@ -149,6 +153,45 @@ export const PRODUCTION_DEPS: McpHandlerDeps = {
 export function wwwAuthHeader(resourceMetadataUrl: string, errorParam = ''): string {
   const errSegment = errorParam ? `, error="${errorParam}"` : '';
   return `Bearer realm="worldmonitor"${errSegment}, resource_metadata="${resourceMetadataUrl}"`;
+}
+
+function getMcpBillingVerificationDenial(
+  entitlements: Awaited<ReturnType<McpHandlerDeps['getEntitlements']>>,
+  corsHeaders: Record<string, string>,
+): Response | null {
+  // The shared helper owns status, retry normalization, no-store, and billing
+  // headers. McpHandlerDeps intentionally exposes only the entitlement fields
+  // this edge needs, while the helper's wider CachedEntitlements contract is
+  // what the production dependency returns.
+  const denial = getBillingVerificationDenial(
+    entitlements as CachedEntitlements | null,
+    corsHeaders,
+  );
+  const billingStatus = entitlements?.billingStatus;
+  if (!denial || !billingStatus) return null;
+
+  const retryable = denial.status === 503;
+  const message = {
+    subscription_lapsed: 'Subscription lapsed.',
+    renewal_verification_pending: 'Renewal verification pending. Retry shortly.',
+    renewal_verification_failed: 'Renewal verification failed. Retry shortly.',
+  }[billingStatus];
+  const headers = new Headers(denial.headers);
+  headers.set('Cache-Control', 'no-store');
+  headers.set('Content-Type', 'application/json');
+
+  return new Response(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code: retryable ? -32603 : -32001,
+        message,
+        data: { code: billingStatus },
+      },
+    }),
+    { status: denial.status, headers },
+  );
 }
 
 export async function resolveAuthContext(
@@ -315,6 +358,8 @@ async function checkMcpEntitlementGate(
   const tier = ent?.features?.tier ?? 0;
   const mcpAccess = ent?.features?.mcpAccess === true;
   const validUntil = ent?.validUntil ?? 0;
+  const billingDenial = getMcpBillingVerificationDenial(ent, corsHeaders);
+  if (billingDenial) return billingDenial;
   if (!ent || tier < 1 || !mcpAccess || validUntil < Date.now()) {
     return rejected();
   }

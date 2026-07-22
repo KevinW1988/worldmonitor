@@ -94,11 +94,14 @@ async function withMockedConvex(fn, options = {}) {
     }
 
     if (url.endsWith('/api/internal-entitlements')) {
-      return new Response(JSON.stringify({
-        planKey: 'api_starter',
-        validUntil: Date.now() + 86_400_000,
-        features: { apiAccess: true },
-      }), {
+      const value = Object.hasOwn(options, 'entitlementResponse')
+        ? options.entitlementResponse
+        : {
+            planKey: 'api_starter',
+            validUntil: Date.now() + 86_400_000,
+            features: { apiAccess: true },
+          };
+      return new Response(JSON.stringify(value), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -394,6 +397,78 @@ test('short-lived verification marker is served from Redis without another Conve
         features: { apiAccess: false },
         billingStatus: 'renewal_verification_failed',
         retryAfterSeconds: 9,
+      },
+    },
+  });
+});
+
+test('recent not-applicable freshness marker is served from Redis without another Convex request', async () => {
+  await withMockedConvex(async (calls) => {
+    const result = await validateBootstrapUserApiAccess('user_api_owner');
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 403);
+    assert.equal(result.reason, 'cached-forbidden');
+    assert.equal(calls.some((call) => call.url.endsWith('/api/internal-entitlements')), false);
+  }, {
+    redisCache: {
+      'entitlements:test:user_api_owner': {
+        planKey: 'free',
+        validUntil: 0,
+        features: { apiAccess: false },
+        renewalVerificationFreshness: {
+          status: 'not_applicable',
+          checkedAt: Date.now(),
+        },
+      },
+    },
+  });
+});
+
+test('expired not-applicable freshness marker falls through to Convex', async () => {
+  await withMockedConvex(async (calls) => {
+    const result = await validateBootstrapUserApiAccess('user_api_owner');
+
+    assert.equal(result.ok, true);
+    assert.equal(calls.some((call) => call.url.endsWith('/api/internal-entitlements')), true);
+  }, {
+    redisCache: {
+      'entitlements:test:user_api_owner': {
+        planKey: 'free',
+        validUntil: 0,
+        features: { apiAccess: false },
+        renewalVerificationFreshness: {
+          status: 'not_applicable',
+          checkedAt: Date.now() - 60_001,
+        },
+      },
+    },
+  });
+});
+
+test('not-applicable freshness marker is cached for at most 60 seconds', async () => {
+  await withMockedConvex(async (calls) => {
+    const result = await validateBootstrapUserApiAccess('user_api_owner');
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 403);
+    const cacheWrite = calls.find((call) => {
+      if (!call.url.startsWith('https://upstash.test') || !call.body.includes('"SET"')) return false;
+      const command = JSON.parse(call.body).find((entry) => entry[0] === 'SET');
+      return command?.[1] === 'entitlements:test:user_api_owner';
+    });
+    assert.ok(cacheWrite);
+    const setCommand = JSON.parse(cacheWrite.body).find((entry) => entry[0] === 'SET');
+    const ttl = Number(setCommand[4]);
+    assert.ok(ttl > 0 && ttl <= 60, `unexpected marker TTL: ${ttl}`);
+  }, {
+    entitlementResponse: {
+      planKey: 'free',
+      validUntil: 0,
+      features: { apiAccess: false },
+      renewalVerificationFreshness: {
+        status: 'not_applicable',
+        checkedAt: Date.now(),
       },
     },
   });

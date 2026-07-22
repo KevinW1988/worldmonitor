@@ -1021,6 +1021,15 @@ export function createDomainGateway(
       // re-check via the fallback path. Mirror the per-handler runProPreChecks
       // and authorize-pro entitlement guards.
       const ent = await getEntitlements(verified.userId);
+      const billingDenial = getBillingVerificationDenial(ent, corsHeaders);
+      if (billingDenial) {
+        emitRequest(
+          billingDenial.status,
+          billingDenial.status === 503 ? 'billing_verification_503' : 'tier_403',
+          null,
+        );
+        return billingDenial;
+      }
       if (
         !ent ||
         ent.features.tier < 1 ||
@@ -1210,16 +1219,32 @@ export function createDomainGateway(
         );
         return billingDenial;
       }
-      // Fail-OPEN on an unresolved entitlement (null ⇒ transient Convex/cache
-      // failure, indistinguishable from "no row"): mirrors the #3199 block below
-      // and avoids 403-ing an ACTIVE subscriber fleet-wide during a backend
-      // blip. Reject only on an AFFIRMATIVELY inactive/expired entitlement — the
-      // systematic churn case (#4611), always resolvable under normal operation
-      // (the warm 15-min entitlement cache closes the leak; an outage degrades
-      // to prior behavior rather than denying paying customers).
+      // A validated wm_ key proves key ownership, not current paid access.
+      // getEntitlements() returns null for a missing row and for bounded
+      // verification failures/timeouts, so allowing null would turn a billing
+      // backend timeout into paid API access. Fail closed with a retryable 503;
+      // only an affirmative, current apiAccess entitlement may proceed.
+      if (!userKeyEntitlement) {
+        emitRequest(503, 'billing_verification_503', null);
+        return new Response(
+          JSON.stringify({
+            error: 'Unable to verify API access',
+            code: 'entitlement_verification_unavailable',
+          }),
+          {
+            status: 503,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-store',
+              'Retry-After': '5',
+            },
+          },
+        );
+      }
       if (
-        userKeyEntitlement &&
-        (!userKeyEntitlement.features.apiAccess || userKeyEntitlement.validUntil < Date.now())
+        !userKeyEntitlement.features.apiAccess ||
+        userKeyEntitlement.validUntil < Date.now()
       ) {
         emitRequest(403, 'tier_403', null);
         return createGatewayAuthErrorResponse(

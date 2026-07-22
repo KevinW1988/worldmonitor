@@ -1,5 +1,5 @@
 import { anyApi, httpRouter } from "convex/server";
-import { httpAction } from "./_generated/server";
+import { httpAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { webhookHandler } from "./payments/webhookHandlers";
 import { resendWebhookHandler } from "./resendWebhookHandler";
@@ -125,12 +125,10 @@ function setRateLimitResponseHeaders(headers: Headers, limit: number, reset: num
   headers.set("Retry-After", String(retryAfter));
 }
 
-const http = httpRouter();
-
-http.route({
-  path: "/api/internal-entitlements",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
+export async function internalEntitlementsHttpHandler(
+  ctx: ActionCtx,
+  request: Request,
+): Promise<Response> {
     const providedSecret = request.headers.get("x-convex-shared-secret") ?? "";
     const expectedSecret = process.env.CONVEX_SERVER_SHARED_SECRET ?? "";
     if (!expectedSecret || !(await timingSafeEqualStrings(providedSecret, expectedSecret))) {
@@ -169,6 +167,9 @@ http.route({
       | "renewal_verification_failed"
       | undefined;
     let retryAfterSeconds: number | undefined;
+    let renewalVerificationFreshness:
+      | { status: "not_applicable"; checkedAt: number }
+      | undefined;
 
     // Expired stored entitlements are deliberately returned as free-tier
     // defaults by the query. Before the gateway turns that into a hard denial,
@@ -178,15 +179,24 @@ http.route({
         internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
         { userId: body.userId },
       );
-      if (verification.status === "active") {
+      if (verification.status === "not_applicable") {
+        renewalVerificationFreshness = {
+          status: "not_applicable",
+          checkedAt: Date.now(),
+        };
+      } else {
+        // The provider action and a webhook can interleave. Always re-read the
+        // source of truth before attaching a denial marker so a concurrent
+        // renewal wins over a stale action result.
         result = await ctx.runQuery(
           internal.entitlements.getEntitlementsByUserId,
           { userId: body.userId },
         );
-      } else if (verification.status !== "not_applicable") {
-        billingStatus = verification.status;
-        if ("retryAfterSeconds" in verification) {
-          retryAfterSeconds = verification.retryAfterSeconds;
+        if (result.features.tier === 0 && verification.status !== "active") {
+          billingStatus = verification.status;
+          if ("retryAfterSeconds" in verification) {
+            retryAfterSeconds = verification.retryAfterSeconds;
+          }
         }
       }
     }
@@ -195,11 +205,19 @@ http.route({
       ...result,
       ...(billingStatus ? { billingStatus } : {}),
       ...(retryAfterSeconds != null ? { retryAfterSeconds } : {}),
+      ...(renewalVerificationFreshness ? { renewalVerificationFreshness } : {}),
     }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
-  }),
+}
+
+const http = httpRouter();
+
+http.route({
+  path: "/api/internal-entitlements",
+  method: "POST",
+  handler: httpAction(internalEntitlementsHttpHandler),
 });
 
 http.route({

@@ -1012,6 +1012,59 @@ describe('gateway internal-MCP — F1: validUntil re-check', () => {
   });
 });
 
+describe('gateway internal-MCP — billing renewal verification', () => {
+  for (const billingStatus of ['renewal_verification_pending', 'renewal_verification_failed']) {
+    it(`${billingStatus} → retryable no-store 503`, async () => {
+      installFetchStub({
+        entitlement: () => ({
+          planKey: 'free',
+          features: {
+            tier: 0, apiAccess: false, apiRateLimit: 0, maxDashboards: 1,
+            prioritySupport: false, exportFormats: [], mcpAccess: false,
+          },
+          validUntil: 0,
+          billingStatus,
+          retryAfterSeconds: 17,
+        }),
+      });
+      const handler = makeGateway();
+      const req = await buildSignedRequest();
+      const res = await handler(req);
+
+      assert.equal(res.status, 503);
+      assert.equal(res.headers.get('Cache-Control'), 'no-store');
+      assert.equal(res.headers.get('Retry-After'), '17');
+      assert.equal(res.headers.get('X-Billing-Verification'), billingStatus);
+      assert.equal((await res.json()).code, billingStatus);
+      assert.equal(lastHandlerRequest, null, 'handler must not run while renewal verification is unresolved');
+    });
+  }
+
+  it('subscription_lapsed → distinct hard denial', async () => {
+    installFetchStub({
+      entitlement: () => ({
+        planKey: 'free',
+        features: {
+          tier: 0, apiAccess: false, apiRateLimit: 0, maxDashboards: 1,
+          prioritySupport: false, exportFormats: [], mcpAccess: false,
+        },
+        validUntil: 0,
+        billingStatus: 'subscription_lapsed',
+      }),
+    });
+    const handler = makeGateway();
+    const req = await buildSignedRequest();
+    const res = await handler(req);
+
+    assert.equal(res.status, 403);
+    assert.equal(res.headers.get('Cache-Control'), 'no-store');
+    assert.equal(res.headers.get('Retry-After'), null);
+    assert.equal(res.headers.get('X-Billing-Verification'), 'subscription_lapsed');
+    assert.equal((await res.json()).code, 'subscription_lapsed');
+    assert.equal(lastHandlerRequest, null, 'handler must not run after a confirmed lapse');
+  });
+});
+
 describe('gateway internal-MCP — F7: HMAC headers stripped before handler sees request', () => {
   it('handler receives no X-WM-MCP-Internal or X-WM-MCP-User-Id; only the trusted-marker pair', async () => {
     const handler = makeGateway();

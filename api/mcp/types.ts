@@ -235,7 +235,16 @@ export interface QuotaRejected {
 export interface McpHandlerDeps {
   resolveBearerToContext: (token: string) => Promise<McpAuthContext | null>;
   validateProMcpToken: (tokenId: string) => Promise<{ userId: string } | null>;
-  getEntitlements: (userId: string) => Promise<{ planKey?: string; features: { tier: number; mcpAccess?: boolean }; validUntil: number } | null>;
+  getEntitlements: (userId: string) => Promise<{
+    planKey?: string;
+    features: { tier: number; mcpAccess?: boolean };
+    validUntil: number;
+    billingStatus?:
+      | 'subscription_lapsed'
+      | 'renewal_verification_pending'
+      | 'renewal_verification_failed';
+    retryAfterSeconds?: number;
+  } | null>;
   // #4859: Convex userApiKeys hash lookup (same shared helper as the REST
   // gateway). Returns the key owner, or null for unknown/revoked keys. The
   // production impl fail-softs to null internally; a THROW from a dep is

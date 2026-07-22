@@ -12,8 +12,8 @@
  *   - regular non-tier-gated keyed RPC and PREMIUM_RPC_PATHS: a wm_ key whose
  *     owner lacks ACTIVE apiAccess (downgraded or past validUntil) → 403,
  *     BEFORE the #3199 rate-limit block; active keys unaffected.
- *   - transient/unresolvable entitlement (getEntitlements null) → fail-OPEN
- *     (served), so a Convex/cache blip never 403s active subscribers.
+ *   - transient/unresolvable entitlement (getEntitlements null) → retryable
+ *     fail-closed 503, so a verification timeout cannot grant paid access.
  *   - PUBLIC_NO_AUTH_RPC_PATHS serve free data to everyone: the wm_ key is NOT
  *     re-validated there (no unauthenticated Convex-lookup amplification, no
  *     gating the anonymous lead forms) — served as anonymous.
@@ -277,14 +277,15 @@ describe("#4611 — expired wm_ key rejected on all route classes", () => {
     expect(await res.json()).toMatchObject({ code: "renewal_verification_failed" });
   });
 
-  test("null entitlement (transient Convex/cache failure) → 200 fail-open, active customers not locked out", async () => {
+  test("null entitlement (verification timeout/cache failure) → retryable no-store 503", async () => {
     entitlement = null;
     const res = await makeGateway()(keyReq(REGULAR_PATH), ctx);
-    // Fail-OPEN: an unresolvable entitlement is "unknown", not "denied", so a
-    // backend blip never 403s active subscribers fleet-wide. The systematic
-    // churn leak is still closed on the warm path, where the downgraded
-    // entitlement resolves and 403s (the downgraded/expired tests above).
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(res.headers.get("Retry-After")).toBe("5");
+    expect(await res.json()).toMatchObject({ code: "entitlement_verification_unavailable" });
+    expect(checkBurst).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
   // --- active subscription unaffected --------------------------------------

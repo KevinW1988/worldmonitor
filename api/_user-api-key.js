@@ -18,6 +18,7 @@ const USER_KEY_NEGATIVE_CACHE_TTL_SECONDS = 60;
 const USER_KEY_CACHE_PREFIX = 'user-api-key:';
 const BOOTSTRAP_USER_KEY_NEGATIVE_CACHE_PREFIX = 'bootstrap-user-api-key-invalid:';
 const ENTITLEMENT_CACHE_TTL_SECONDS = 900;
+const NOT_APPLICABLE_VERIFICATION_TTL_SECONDS = 60;
 const ENTITLEMENT_ENV_PREFIX = process.env.DODO_PAYMENTS_ENVIRONMENT === 'live_mode' ? 'live' : 'test';
 const NEG_SENTINEL = '__WM_NEG__';
 
@@ -294,16 +295,32 @@ function billingVerificationFailure(value) {
   };
 }
 
+function notApplicableVerificationTtlSeconds(value) {
+  const marker = value?.renewalVerificationFreshness;
+  if (marker?.status !== 'not_applicable') return null;
+  if (typeof marker.checkedAt !== 'number' || !Number.isFinite(marker.checkedAt)) return null;
+  const remainingMs = marker.checkedAt
+    + NOT_APPLICABLE_VERIFICATION_TTL_SECONDS * 1_000
+    - Date.now();
+  return remainingMs > 0
+    ? Math.max(1, Math.min(
+      NOT_APPLICABLE_VERIFICATION_TTL_SECONDS,
+      Math.ceil(remainingMs / 1_000),
+    ))
+    : null;
+}
+
 function entitlementCacheTtlSeconds(value) {
   const status = value?.billingStatus;
   if (status === 'subscription_lapsed') return 300;
-  if (status !== 'renewal_verification_pending' && status !== 'renewal_verification_failed') {
-    return ENTITLEMENT_CACHE_TTL_SECONDS;
+  if (status === 'renewal_verification_pending' || status === 'renewal_verification_failed') {
+    const rawRetryAfter = Number(value?.retryAfterSeconds);
+    return Number.isFinite(rawRetryAfter)
+      ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter)))
+      : VALIDATION_RETRY_AFTER_SECONDS;
   }
-  const rawRetryAfter = Number(value?.retryAfterSeconds);
-  return Number.isFinite(rawRetryAfter)
-    ? Math.max(1, Math.min(60, Math.ceil(rawRetryAfter)))
-    : VALIDATION_RETRY_AFTER_SECONDS;
+  const notApplicableTtl = notApplicableVerificationTtlSeconds(value);
+  return notApplicableTtl ?? ENTITLEMENT_CACHE_TTL_SECONDS;
 }
 
 export async function validateBootstrapUserApiAccess(userId) {
@@ -320,6 +337,9 @@ async function validateBootstrapUserApiAccessUncached(userId) {
   if (cached.status === 'hit' && cached.value && typeof cached.value === 'object') {
     const cachedBillingFailure = billingVerificationFailure(cached.value);
     if (cachedBillingFailure) return cachedBillingFailure;
+    if (notApplicableVerificationTtlSeconds(cached.value) !== null) {
+      return { ok: false, status: 403, error: 'API access subscription required', reason: 'cached-forbidden' };
+    }
     const validUntil = Number(cached.value.validUntil ?? 0);
     if (Number.isFinite(validUntil) && validUntil >= Date.now()) {
       if (hasCurrentApiAccess(cached.value)) return { ok: true };

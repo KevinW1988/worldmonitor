@@ -121,6 +121,10 @@ const ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS = 60_000;
 // If Dodo is reachable but still reports no covering period, avoid re-querying
 // on every route hit. Organic webhooks clear this state immediately.
 const ON_DEMAND_RENEWAL_LAPSED_COOLDOWN_MS = 5 * 60_000;
+// A request that affirmatively resolves one subscription as non-covering can
+// leave another recently-stale subscription to inspect. Tell the caller to
+// retry promptly without starting a second provider call in this invocation.
+const ON_DEMAND_RENEWAL_PROGRESS_RETRY_SECONDS = 1;
 
 function reconcileBackoffMs(failureCount: number): number {
   if (failureCount <= 0) return 0;
@@ -229,6 +233,27 @@ type OnDemandRenewalClaim =
   | { kind: "failed"; retryAfterSeconds: number }
   | { kind: "lapsed" }
   | { kind: "not_applicable" };
+
+type OnDemandRenewalCandidate = {
+  _id: Id<"subscriptions">;
+  planKey: string;
+  currentPeriodEnd: number;
+  renewalVerificationState?: "pending" | "failed" | "lapsed";
+  renewalVerificationAttemptAt?: number;
+};
+
+type OnDemandRenewalCandidateSelection<T extends OnDemandRenewalCandidate> =
+  | { kind: "candidate"; candidate: T }
+  | { kind: "pending"; retryAfterSeconds: number }
+  | { kind: "failed"; retryAfterSeconds: number }
+  | { kind: "lapsed" };
+
+type OnDemandRenewalResolution =
+  | { kind: "active" }
+  | { kind: "unresolved" }
+  | { kind: "pending"; retryAfterSeconds: number }
+  | { kind: "failed"; retryAfterSeconds: number }
+  | { kind: "lapsed" };
 
 type OnDemandRenewalResult =
   | { status: "active" }
@@ -656,6 +681,74 @@ function retryAfterSeconds(windowMs: number, elapsedMs: number): number {
 }
 
 /**
+ * Classifies all recently-stale rows for one user without starting provider
+ * work. A live pending lease is user-scoped: claiming a different row while
+ * it is in flight would fan concurrent requests out to Dodo. Failed and
+ * affirmatively-lapsed cooldowns, however, do not block progress to the next
+ * unresolved row.
+ */
+function selectOnDemandRenewalCandidate<T extends OnDemandRenewalCandidate>(
+  subscriptions: T[],
+  now: number,
+): OnDemandRenewalCandidateSelection<T> {
+  const ordered = [...subscriptions].sort((a, b) =>
+    compareEntitlementPlans(
+      { planKey: b.planKey, validUntil: b.currentPeriodEnd },
+      { planKey: a.planKey, validUntil: a.currentPeriodEnd },
+    ),
+  );
+
+  // A request already verifying any row may restore the user's entitlement.
+  // Coalesce at the user level before looking for another claimable row.
+  for (const subscription of ordered) {
+    const attemptedAt = subscription.renewalVerificationAttemptAt;
+    if (
+      attemptedAt != null &&
+      subscription.renewalVerificationState === "pending"
+    ) {
+      const elapsed = Math.max(0, now - attemptedAt);
+      if (elapsed < ON_DEMAND_RENEWAL_LEASE_MS) {
+        return {
+          kind: "pending",
+          retryAfterSeconds: retryAfterSeconds(ON_DEMAND_RENEWAL_LEASE_MS, elapsed),
+        };
+      }
+    }
+  }
+
+  let failedRetryAfterSeconds: number | null = null;
+  for (const subscription of ordered) {
+    const attemptedAt = subscription.renewalVerificationAttemptAt;
+    if (attemptedAt != null) {
+      const elapsed = Math.max(0, now - attemptedAt);
+      if (
+        subscription.renewalVerificationState === "failed" &&
+        elapsed < ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS
+      ) {
+        failedRetryAfterSeconds = Math.max(
+          failedRetryAfterSeconds ?? 0,
+          retryAfterSeconds(ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS, elapsed),
+        );
+        continue;
+      }
+      if (
+        subscription.renewalVerificationState === "lapsed" &&
+        elapsed < ON_DEMAND_RENEWAL_LAPSED_COOLDOWN_MS
+      ) {
+        continue;
+      }
+    }
+
+    return { kind: "candidate", candidate: subscription };
+  }
+
+  if (failedRetryAfterSeconds != null) {
+    return { kind: "failed", retryAfterSeconds: failedRetryAfterSeconds };
+  }
+  return { kind: "lapsed" };
+}
+
+/**
  * Atomically claims the strongest recently-stale active subscription for a
  * user. Convex mutations serialize conflicting writes, so concurrent premium
  * requests see one `claimed` result and the rest see the durable `pending`
@@ -679,20 +772,7 @@ export const claimRecentlyStaleSubscriptionForVerification = internalMutation({
       )
       .collect();
 
-    let candidate: (typeof subscriptions)[number] | null = null;
-    for (const subscription of subscriptions) {
-      if (
-        candidate === null ||
-        compareEntitlementPlans(
-          { planKey: subscription.planKey, validUntil: subscription.currentPeriodEnd },
-          { planKey: candidate.planKey, validUntil: candidate.currentPeriodEnd },
-        ) > 0
-      ) {
-        candidate = subscription;
-      }
-    }
-
-    if (!candidate) {
+    if (subscriptions.length === 0) {
       // A caller with billing history but no recently-stale active row has no
       // uncertain provider state to verify on the request path. Preserve a
       // definitive lapse signal for corrected inactive rows and old churn.
@@ -703,34 +783,11 @@ export const claimRecentlyStaleSubscriptionForVerification = internalMutation({
       return hasBillingHistory ? { kind: "lapsed" } : { kind: "not_applicable" };
     }
 
-    const attemptedAt = candidate.renewalVerificationAttemptAt;
-    if (attemptedAt != null) {
-      const elapsed = Math.max(0, args.now - attemptedAt);
-      if (
-        candidate.renewalVerificationState === "pending" &&
-        elapsed < ON_DEMAND_RENEWAL_LEASE_MS
-      ) {
-        return {
-          kind: "pending",
-          retryAfterSeconds: retryAfterSeconds(ON_DEMAND_RENEWAL_LEASE_MS, elapsed),
-        };
-      }
-      if (
-        candidate.renewalVerificationState === "failed" &&
-        elapsed < ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS
-      ) {
-        return {
-          kind: "failed",
-          retryAfterSeconds: retryAfterSeconds(ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS, elapsed),
-        };
-      }
-      if (
-        candidate.renewalVerificationState === "lapsed" &&
-        elapsed < ON_DEMAND_RENEWAL_LAPSED_COOLDOWN_MS
-      ) {
-        return { kind: "lapsed" };
-      }
+    const selection = selectOnDemandRenewalCandidate(subscriptions, args.now);
+    if (selection.kind !== "candidate") {
+      return selection;
     }
+    const candidate = selection.candidate;
 
     await ctx.db.patch(candidate._id, {
       renewalVerificationState: "pending",
@@ -749,6 +806,53 @@ export const claimRecentlyStaleSubscriptionForVerification = internalMutation({
         reconcileNotFoundCount: candidate.reconcileNotFoundCount,
       },
     };
+  },
+});
+
+/**
+ * Resolves the user-level state after one claimed row has been reconciled.
+ * This is deliberately read-only: if another row is unresolved, the current
+ * action returns a short retry instead of claiming it and accidentally
+ * stranding a lease without making the corresponding provider call.
+ */
+export const getOnDemandRenewalResolution = internalQuery({
+  args: {
+    userId: v.string(),
+    now: v.number(),
+  },
+  handler: async (ctx, args): Promise<OnDemandRenewalResolution> => {
+    const entitlement = await ctx.db
+      .query("entitlements")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .first();
+    if (
+      entitlement &&
+      entitlement.features.tier > 0 &&
+      entitlement.validUntil >= args.now
+    ) {
+      return { kind: "active" };
+    }
+
+    const recentCutoff = args.now - ON_DEMAND_RENEWAL_RECENT_WINDOW_MS;
+    const subscriptions = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_userId_status_currentPeriodEnd", (q) =>
+        q
+          .eq("userId", args.userId)
+          .eq("status", "active")
+          .gte("currentPeriodEnd", recentCutoff)
+          .lt("currentPeriodEnd", args.now),
+      )
+      .collect();
+
+    if (subscriptions.length === 0) {
+      return { kind: "lapsed" };
+    }
+
+    const selection = selectOnDemandRenewalCandidate(subscriptions, args.now);
+    return selection.kind === "candidate"
+      ? { kind: "unresolved" }
+      : selection;
   },
 });
 
@@ -1005,7 +1109,11 @@ export const expireMissingDodoSubscription = internalMutation({
 });
 
 type StaleRowOutcome =
-  | { kind: "reconciled" }
+  | {
+      kind: "reconciled";
+      status: SubscriptionStatus;
+      currentPeriodEnd: number;
+    }
   | {
       kind: "skipped";
       reason: ReconciliationSkipReason | "remote_status_unusable";
@@ -1103,7 +1211,11 @@ async function reconcileOneStaleRow(
     )) as ReconciliationMutationResult;
     // `apply` records its own backoff for the still-stale skip reasons.
     return result.kind === "reconciled"
-      ? { kind: "reconciled" }
+      ? {
+          kind: "reconciled",
+          status: result.status,
+          currentPeriodEnd: result.currentPeriodEnd,
+        }
       : { kind: "skipped", reason: result.reason };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1149,6 +1261,17 @@ async function finalizeOnDemandRenewalVerification(
   );
 }
 
+const ON_DEMAND_RENEWAL_FAILURE_RETRY_SECONDS = Math.ceil(
+  ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS / 1000,
+);
+
+function onDemandRenewalFailureResult(): OnDemandRenewalResult {
+  return {
+    status: "renewal_verification_failed",
+    retryAfterSeconds: ON_DEMAND_RENEWAL_FAILURE_RETRY_SECONDS,
+  };
+}
+
 /**
  * Bounded request-path rescue for a recently expired local entitlement.
  * Reuses the cron's provider normalization + race-safe apply mutation, while a
@@ -1167,11 +1290,18 @@ export const verifyRecentlyStaleSubscriptionOnDemand = internalAction({
         v.union(v.literal("not_found"), v.literal("server_error")),
       ),
     ),
+    convexFailureInjectionForTest: v.optional(
+      v.union(
+        v.literal("post_reconcile_query"),
+        v.literal("finalize"),
+      ),
+    ),
   },
   handler: async (ctx, args): Promise<OnDemandRenewalResult> => {
     const usesTestInjection =
       args.remoteSubscriptionsForTest !== undefined ||
-      args.errorInjectionForTest !== undefined;
+      args.errorInjectionForTest !== undefined ||
+      args.convexFailureInjectionForTest !== undefined;
     if (usesTestInjection && process.env.NODE_ENV !== "test") {
       throw new Error(
         "[billing/on-demand-renewal] test injection args are only allowed under test",
@@ -1212,6 +1342,35 @@ export const verifyRecentlyStaleSubscriptionOnDemand = internalAction({
     const errorInjection = new Map<string, "not_found" | "server_error">(
       Object.entries(args.errorInjectionForTest ?? {}),
     );
+    let injectFinalizeFailure = args.convexFailureInjectionForTest === "finalize";
+    const safeFinalize = async (
+      status: "active" | "failed" | "lapsed",
+    ): Promise<boolean> => {
+      try {
+        if (injectFinalizeFailure) {
+          injectFinalizeFailure = false;
+          throw new Error("simulated post-claim finalize failure");
+        }
+        await finalizeOnDemandRenewalVerification(ctx, claim, status);
+        return true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // sentry-coverage-ok: Convex auto-Sentry captures console.error. This
+        // action must return a typed retry response instead of letting a
+        // post-provider Convex failure become an opaque 500.
+        console.error(
+          `[billing/on-demand-renewal] Failed to finalize ${status} verification dodoSubscriptionId=${claim.subscription.dodoSubscriptionId} userId=${claim.subscription.userId}: ${message}`,
+        );
+        return false;
+      }
+    };
+    const bestEffortFinalizeFailed = async (): Promise<void> => {
+      if (!(await safeFinalize("failed"))) {
+        // One bounded retry contains a transient Convex failure without
+        // turning the request into an unbounded mutation loop.
+        await safeFinalize("failed");
+      }
+    };
 
     let outcome: StaleRowOutcome;
     try {
@@ -1232,38 +1391,103 @@ export const verifyRecentlyStaleSubscriptionOnDemand = internalAction({
       console.error(
         `[billing/on-demand-renewal] Failed before Dodo verification dodoSubscriptionId=${claim.subscription.dodoSubscriptionId} userId=${claim.subscription.userId}: ${message}`,
       );
-      await finalizeOnDemandRenewalVerification(ctx, claim, "failed");
-      return {
-        status: "renewal_verification_failed",
-        retryAfterSeconds: Math.ceil(ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS / 1000),
-      };
+      await bestEffortFinalizeFailed();
+      return onDemandRenewalFailureResult();
     }
 
-    if (
-      outcome.kind === "failed" ||
-      outcome.kind === "terminal_not_found" ||
-      (outcome.kind === "skipped" &&
-        (outcome.reason === "remote_status_unusable" ||
-          outcome.reason === "local_updated_concurrently"))
-    ) {
-      await finalizeOnDemandRenewalVerification(ctx, claim, "failed");
-      return {
-        status: "renewal_verification_failed",
-        retryAfterSeconds: Math.ceil(ON_DEMAND_RENEWAL_FAILURE_COOLDOWN_MS / 1000),
-      };
-    }
-
-    const entitlement = await ctx.runQuery(
-      internal.entitlements.getEntitlementsByUserId,
-      { userId: args.userId },
-    );
-    if (entitlement.features.tier > 0 && entitlement.validUntil >= now) {
-      await finalizeOnDemandRenewalVerification(ctx, claim, "active");
+    const outcomeConfirmsCoveringPeriod =
+      outcome.kind === "reconciled" &&
+      outcome.status !== "expired" &&
+      outcome.currentPeriodEnd >= now;
+    if (outcomeConfirmsCoveringPeriod) {
+      // `applyDodoSubscriptionReconciliation` atomically wrote the covering
+      // subscription and recomputed entitlement before returning. Finalize is
+      // only lease cleanup here, so a cleanup failure must not hide confirmed
+      // paid access from this request.
+      await safeFinalize("active");
       return { status: "active" };
     }
 
-    await finalizeOnDemandRenewalVerification(ctx, claim, "lapsed");
-    return { status: "subscription_lapsed" };
+    const outcomeIsUncertain =
+      outcome.kind === "failed" ||
+      outcome.kind === "terminal_not_found" ||
+      (outcome.kind === "skipped" &&
+        (outcome.reason === "local_missing" ||
+          outcome.reason === "remote_status_unusable" ||
+          outcome.reason === "local_updated_concurrently" ||
+          outcome.reason === "remote_not_newer")) ||
+      (outcome.kind === "reconciled" &&
+        (outcome.status === "active" || outcome.status === "on_hold"));
+    if (outcomeIsUncertain) {
+      await bestEffortFinalizeFailed();
+      return onDemandRenewalFailureResult();
+    }
+
+    let resolution: OnDemandRenewalResolution;
+    try {
+      if (args.convexFailureInjectionForTest === "post_reconcile_query") {
+        throw new Error("simulated post-claim resolution query failure");
+      }
+      resolution = (await ctx.runQuery(
+        internal.payments.billing.getOnDemandRenewalResolution,
+        { userId: args.userId, now },
+      )) as OnDemandRenewalResolution;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // sentry-coverage-ok: Convex auto-Sentry captures console.error. The
+      // provider call already happened, so contain this post-claim Convex
+      // failure and leave a short, durable retry cooldown when possible.
+      console.error(
+        `[billing/on-demand-renewal] Failed to resolve post-reconcile user state dodoSubscriptionId=${claim.subscription.dodoSubscriptionId} userId=${claim.subscription.userId}: ${message}`,
+      );
+      await bestEffortFinalizeFailed();
+      return onDemandRenewalFailureResult();
+    }
+
+    switch (resolution.kind) {
+      case "active":
+        // A concurrent webhook or another subscription proves coverage. As
+        // above, finalization is cleanup and cannot revoke that confirmation.
+        await safeFinalize("active");
+        return { status: "active" };
+      case "pending": {
+        const finalized = await safeFinalize("lapsed");
+        if (!finalized) await bestEffortFinalizeFailed();
+        return finalized
+          ? {
+              status: "renewal_verification_pending",
+              retryAfterSeconds: resolution.retryAfterSeconds,
+            }
+          : onDemandRenewalFailureResult();
+      }
+      case "unresolved": {
+        const finalized = await safeFinalize("lapsed");
+        if (!finalized) await bestEffortFinalizeFailed();
+        return finalized
+          ? {
+              status: "renewal_verification_pending",
+              retryAfterSeconds: ON_DEMAND_RENEWAL_PROGRESS_RETRY_SECONDS,
+            }
+          : onDemandRenewalFailureResult();
+      }
+      case "failed": {
+        const finalized = await safeFinalize("lapsed");
+        if (!finalized) await bestEffortFinalizeFailed();
+        return finalized
+          ? {
+              status: "renewal_verification_failed",
+              retryAfterSeconds: resolution.retryAfterSeconds,
+            }
+          : onDemandRenewalFailureResult();
+      }
+      case "lapsed": {
+        const finalized = await safeFinalize("lapsed");
+        if (!finalized) await bestEffortFinalizeFailed();
+        return finalized
+          ? { status: "subscription_lapsed" }
+          : onDemandRenewalFailureResult();
+      }
+    }
   },
 });
 

@@ -3753,6 +3753,204 @@ describe("payments billing missed renewal reconciliation", () => {
       expect((await readEntitlement(t, TEST_USER_ID))?.planKey).toBe("free");
     });
 
+    test("does not report a user-level lapse until every recently-stale subscription is resolved", async () => {
+      const t = convexTest(schema, modules);
+      const staleEnd = NOW - DAY_MS;
+      const renewedEnd = NOW + 30 * DAY_MS;
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_stronger_lapsed",
+        planKey: "enterprise",
+        dodoProductId: PRODUCT_CATALOG.enterprise.dodoProductId!,
+        currentPeriodEnd: staleEnd,
+      });
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_weaker_renewed",
+        planKey: "pro_monthly",
+        dodoProductId: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+        currentPeriodEnd: staleEnd,
+        seedEntitlement: false,
+      });
+
+      const strongerResult = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_stronger_lapsed",
+              product_id: PRODUCT_CATALOG.enterprise.dodoProductId!,
+              status: "expired",
+              previous_billing_date: new Date(NOW - 31 * DAY_MS).toISOString(),
+              next_billing_date: new Date(staleEnd).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(strongerResult).toEqual({
+        status: "renewal_verification_pending",
+        retryAfterSeconds: 1,
+      });
+      expect((await readSub(t, "on_demand_stronger_lapsed"))?.status).toBe("expired");
+
+      const weakerResult = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW + 1,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_weaker_renewed",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "active",
+              previous_billing_date: new Date(NOW).toISOString(),
+              next_billing_date: new Date(renewedEnd).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(weakerResult).toEqual({ status: "active" });
+      expect((await readSub(t, "on_demand_weaker_renewed"))?.currentPeriodEnd).toBe(renewedEnd);
+      expect((await readEntitlement(t, TEST_USER_ID))?.validUntil).toBe(renewedEnd);
+    });
+
+    test("treats an unchanged active provider period as verification uncertainty", async () => {
+      const t = convexTest(schema, modules);
+      const staleEnd = NOW - DAY_MS;
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_active_unchanged",
+        currentPeriodEnd: staleEnd,
+      });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_active_unchanged",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "active",
+              previous_billing_date: new Date(NOW - 31 * DAY_MS).toISOString(),
+              next_billing_date: new Date(staleEnd).toISOString(),
+            },
+          ],
+          // The first failed-state finalization throws; the bounded best-effort
+          // retry must contain it and durably leave this row in failed cooldown.
+          convexFailureInjectionForTest: "finalize",
+        },
+      );
+
+      expect(result).toEqual({
+        status: "renewal_verification_failed",
+        retryAfterSeconds: 60,
+      });
+      expect((await readSub(t, "on_demand_active_unchanged"))?.renewalVerificationState).toBe("failed");
+      errorSpy.mockRestore();
+    });
+
+    test("treats a newer but still-past active provider period as verification uncertainty", async () => {
+      const t = convexTest(schema, modules);
+      const staleEnd = NOW - 2 * DAY_MS;
+      const stillPastEnd = NOW - DAY_MS;
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_active_still_past",
+        currentPeriodEnd: staleEnd,
+      });
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_active_still_past",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "active",
+              previous_billing_date: new Date(NOW - 31 * DAY_MS).toISOString(),
+              next_billing_date: new Date(stillPastEnd).toISOString(),
+            },
+          ],
+        },
+      );
+
+      expect(result).toEqual({
+        status: "renewal_verification_failed",
+        retryAfterSeconds: 60,
+      });
+      expect((await readSub(t, "on_demand_active_still_past"))?.currentPeriodEnd).toBe(stillPastEnd);
+      expect((await readSub(t, "on_demand_active_still_past"))?.renewalVerificationState).toBe("failed");
+    });
+
+    test("contains a post-reconcile Convex query failure and returns a retryable result", async () => {
+      const t = convexTest(schema, modules);
+      const staleEnd = NOW - DAY_MS;
+      await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_post_query_failure",
+        currentPeriodEnd: staleEnd,
+      });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_post_query_failure",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "expired",
+              previous_billing_date: new Date(NOW - 31 * DAY_MS).toISOString(),
+              next_billing_date: new Date(staleEnd).toISOString(),
+            },
+          ],
+          convexFailureInjectionForTest: "post_reconcile_query",
+        },
+      );
+
+      expect(result).toEqual({
+        status: "renewal_verification_failed",
+        retryAfterSeconds: 60,
+      });
+      expect((await readSub(t, "on_demand_post_query_failure"))?.status).toBe("expired");
+      errorSpy.mockRestore();
+    });
+
+    test("contains a finalize failure and preserves a confirmed active result", async () => {
+      const t = convexTest(schema, modules);
+      const renewedEnd = NOW + 30 * DAY_MS;
+      await seedStaleActiveForReconcile(t, { suffix: "on_demand_finalize_failure" });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await t.action(
+        internal.payments.billing.verifyRecentlyStaleSubscriptionOnDemand,
+        {
+          userId: TEST_USER_ID,
+          now: NOW,
+          remoteSubscriptionsForTest: [
+            {
+              subscription_id: "sub_on_demand_finalize_failure",
+              product_id: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+              status: "active",
+              previous_billing_date: new Date(NOW).toISOString(),
+              next_billing_date: new Date(renewedEnd).toISOString(),
+            },
+          ],
+          convexFailureInjectionForTest: "finalize",
+        },
+      );
+
+      expect(result).toEqual({ status: "active" });
+      expect((await readEntitlement(t, TEST_USER_ID))?.validUntil).toBe(renewedEnd);
+      errorSpy.mockRestore();
+    });
+
     test("surfaces Dodo failure and throttles an immediate retry", async () => {
       const t = convexTest(schema, modules);
       await seedStaleActiveForReconcile(t, { suffix: "on_demand_failure" });
@@ -3790,6 +3988,69 @@ describe("payments billing missed renewal reconciliation", () => {
       });
       expect((await readSub(t, "on_demand_failure"))?.currentPeriodEnd).toBe(NOW - DAY_MS);
       errorSpy.mockRestore();
+    });
+
+    test.each(["failed", "lapsed"] as const)(
+      "progresses past a stronger subscription in the %s cooldown",
+      async (verificationState) => {
+        const t = convexTest(schema, modules);
+        const strongerId = await seedStaleActiveForReconcile(t, {
+          suffix: `on_demand_${verificationState}_stronger`,
+          planKey: "enterprise",
+          dodoProductId: PRODUCT_CATALOG.enterprise.dodoProductId!,
+        });
+        const weakerId = await seedStaleActiveForReconcile(t, {
+          suffix: `on_demand_${verificationState}_weaker`,
+          planKey: "pro_monthly",
+          dodoProductId: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+          seedEntitlement: false,
+        });
+        await t.run(async (ctx) => {
+          await ctx.db.patch(strongerId, {
+            renewalVerificationState: verificationState,
+            renewalVerificationAttemptAt: NOW,
+          });
+        });
+
+        const claim = await t.mutation(
+          internal.payments.billing.claimRecentlyStaleSubscriptionForVerification,
+          { userId: TEST_USER_ID, now: NOW + 1_000 },
+        );
+
+        expect(claim.kind).toBe("claimed");
+        if (claim.kind === "claimed") {
+          expect(claim.subscription._id).toBe(weakerId);
+        }
+      },
+    );
+
+    test("coalesces at the user level when a different stale subscription is pending", async () => {
+      const t = convexTest(schema, modules);
+      const strongerId = await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_pending_stronger",
+        planKey: "enterprise",
+        dodoProductId: PRODUCT_CATALOG.enterprise.dodoProductId!,
+      });
+      const weakerId = await seedStaleActiveForReconcile(t, {
+        suffix: "on_demand_pending_weaker",
+        planKey: "pro_monthly",
+        dodoProductId: PRODUCT_CATALOG.pro_monthly.dodoProductId!,
+        seedEntitlement: false,
+      });
+      await t.run(async (ctx) => {
+        await ctx.db.patch(weakerId, {
+          renewalVerificationState: "pending",
+          renewalVerificationAttemptAt: NOW,
+        });
+      });
+
+      const claim = await t.mutation(
+        internal.payments.billing.claimRecentlyStaleSubscriptionForVerification,
+        { userId: TEST_USER_ID, now: NOW + 1_000 },
+      );
+
+      expect(claim).toEqual({ kind: "pending", retryAfterSeconds: 14 });
+      expect((await t.run((ctx) => ctx.db.get(strongerId)))?.renewalVerificationState).toBeUndefined();
     });
 
     test("atomically coalesces concurrent claims for the same stale subscription", async () => {

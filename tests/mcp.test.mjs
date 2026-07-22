@@ -2789,6 +2789,53 @@ describe('api/mcp.ts — U7 Pro-path', () => {
     assert.equal(res.status, 401);
   });
 
+  for (const billingStatus of ['renewal_verification_pending', 'renewal_verification_failed']) {
+    it(`error: ${billingStatus} → JSON-RPC retryable no-store 503`, async () => {
+      const { deps, pipe } = makeProDeps({
+        getEntitlements: async () => ({
+          planKey: 'free',
+          features: { tier: 0, mcpAccess: false },
+          validUntil: 0,
+          billingStatus,
+          retryAfterSeconds: 19,
+        }),
+      });
+      const res = await mcpHandler(proReq('POST', callBody('get_market_data')), deps);
+
+      assert.equal(res.status, 503);
+      assert.equal(res.headers.get('Cache-Control'), 'no-store');
+      assert.equal(res.headers.get('Retry-After'), '19');
+      assert.equal(res.headers.get('X-Billing-Verification'), billingStatus);
+      const body = await res.json();
+      assert.equal(body.jsonrpc, '2.0');
+      assert.equal(body.error?.code, -32603);
+      assert.equal(body.error?.data?.code, billingStatus);
+      assert.equal(pipe.count, 0);
+    });
+  }
+
+  it('error: subscription_lapsed → distinct JSON-RPC hard denial', async () => {
+    const { deps, pipe } = makeProDeps({
+      getEntitlements: async () => ({
+        planKey: 'free',
+        features: { tier: 0, mcpAccess: false },
+        validUntil: 0,
+        billingStatus: 'subscription_lapsed',
+      }),
+    });
+    const res = await mcpHandler(proReq('POST', callBody('get_market_data')), deps);
+
+    assert.equal(res.status, 403);
+    assert.equal(res.headers.get('Cache-Control'), 'no-store');
+    assert.equal(res.headers.get('Retry-After'), null);
+    assert.equal(res.headers.get('X-Billing-Verification'), 'subscription_lapsed');
+    const body = await res.json();
+    assert.equal(body.jsonrpc, '2.0');
+    assert.equal(body.error?.code, -32001);
+    assert.equal(body.error?.data?.code, 'subscription_lapsed');
+    assert.equal(pipe.count, 0);
+  });
+
   it('error: Redis pipeline throws on INCR → -32603 + 503 + Retry-After', async () => {
     const { deps, pipe } = makeProDeps({ pipelineOpts: { throwOnIncr: true } });
     const res = await mcpHandler(proReq('POST', callBody('get_market_data')), deps);
