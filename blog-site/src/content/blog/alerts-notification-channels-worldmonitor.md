@@ -4,7 +4,7 @@ description: "Telegram, Slack, Discord, email, webhooks, and web push — WorldM
 metaTitle: "Intelligence Alerts: 6 Notification Channels | WorldMonitor"
 keywords: "geopolitical alerts app, telegram news alerts, discord intelligence alerts, web push breaking news, alert fatigue quiet hours, intelligence notifications"
 audience: "Analysts, ops and security teams, traders, journalists, anyone who can't watch a dashboard all day"
-heroImage: "/blog/og/alerts-notification-channels-worldmonitor.png"
+heroImage: "/blog/images/blog/alerts-notification-channels-worldmonitor.jpg"
 pubDate: "2026-07-21"
 ---
 

@@ -4,7 +4,7 @@ description: "energy.worldmonitor.app is WorldMonitor's dedicated energy dashboa
 metaTitle: "Energy Security Dashboard | WorldMonitor"
 keywords: "energy security dashboard, oil and gas monitoring, energy intelligence platform, European gas storage levels, pipeline status map, energy crisis tracker, Strait of Hormuz monitoring"
 audience: "Energy analysts, commodity traders, utilities and policy researchers, logistics teams, macro investors"
-heroImage: "/blog/og/energy-security-dashboard-worldmonitor.png"
+heroImage: "/blog/images/blog/energy-security-dashboard-worldmonitor.jpg"
 pubDate: "2026-07-21"
 ---
 

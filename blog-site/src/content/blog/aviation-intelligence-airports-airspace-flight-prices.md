@@ -4,7 +4,7 @@ description: "WorldMonitor tracks 115 airports, FAA delays, NOTAM closures, mili
 metaTitle: "Aviation Intelligence Dashboard | WorldMonitor"
 keywords: "aviation intelligence dashboard, airport delay monitoring, NOTAM airspace closures, military aircraft tracking, flight prices API, GPS jamming map"
 audience: "Airline and ops teams, travel security managers, OSINT analysts, journalists, frequent travelers"
-heroImage: "/blog/og/aviation-intelligence-airports-airspace-flight-prices.png"
+heroImage: "/blog/images/blog/aviation-intelligence-airports-airspace-flight-prices.jpg"
 pubDate: "2026-07-21"
 ---
 

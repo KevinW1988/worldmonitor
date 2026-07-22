@@ -4,7 +4,7 @@ description: "WorldMonitor maps refugee and IDP populations from UNHCR's officia
 metaTitle: "Refugee & Displacement Tracking | WorldMonitor"
 keywords: "refugee flow data, displacement tracking dashboard, UNHCR data visualization, IDP monitoring, forced displacement statistics, displacement data API"
 audience: "Humanitarian and NGO teams, researchers, journalists, policy analysts, students"
-heroImage: "/blog/og/track-refugee-displacement-flows-unhcr-worldmonitor.png"
+heroImage: "/blog/images/blog/track-refugee-displacement-flows-unhcr-worldmonitor.jpg"
 pubDate: "2026-07-21"
 ---
 

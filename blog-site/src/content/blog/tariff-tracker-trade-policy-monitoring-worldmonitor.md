@@ -4,7 +4,7 @@ description: "WorldMonitor's Trade Policy tracker combines WTO tariff baselines,
 metaTitle: "Tariff Tracker & Trade Policy Monitoring | WorldMonitor"
 keywords: "tariff tracker, trade policy monitoring, US tariff trends, customs revenue data, trade war dashboard, tariff data API, import tariffs"
 audience: "Importers and exporters, procurement teams, supply-chain analysts, macro traders, trade researchers"
-heroImage: "/blog/og/tariff-tracker-trade-policy-monitoring-worldmonitor.png"
+heroImage: "/blog/images/blog/tariff-tracker-trade-policy-monitoring-worldmonitor.jpg"
 pubDate: "2026-07-21"
 ---
 

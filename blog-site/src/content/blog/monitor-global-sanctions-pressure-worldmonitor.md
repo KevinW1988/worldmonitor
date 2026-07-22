@@ -4,7 +4,7 @@ description: "WorldMonitor tracks OFAC SDN and consolidated designations, comput
 metaTitle: "Real-Time Sanctions Monitoring | WorldMonitor"
 keywords: "sanctions tracking tool, OFAC SDN list monitoring, sanctions dashboard, country sanctions exposure, sanctions data API, sanctions pressure score"
 audience: "Compliance analysts, trade and export teams, risk researchers, macro analysts, journalists"
-heroImage: "/blog/og/monitor-global-sanctions-pressure-worldmonitor.png"
+heroImage: "/blog/images/blog/monitor-global-sanctions-pressure-worldmonitor.jpg"
 pubDate: "2026-07-21"
 ---
 

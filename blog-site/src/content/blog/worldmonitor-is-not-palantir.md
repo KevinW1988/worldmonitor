@@ -4,7 +4,7 @@ description: "One command shows the difference: Palantir organizes your institut
 metaTitle: "WorldMonitor Is Not an Open-Source Palantir | World Monitor"
 keywords: "WorldMonitor vs Palantir, Palantir alternative open source, open intelligence platform, economic intelligence dashboard, global financial data platform, build on intelligence API"
 audience: "Press, analysts, developers, investors, anyone who has seen the Palantir comparison"
-heroImage: "/blog/og/worldmonitor-is-not-palantir.png"
+heroImage: "/blog/images/blog/worldmonitor-is-not-palantir.jpg"
 pubDate: "2026-07-21"
 modifiedDate: "2026-07-22"
 ---

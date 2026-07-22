@@ -4,7 +4,7 @@ description: "WorldMonitor merges WHO outbreak news, CDC travel notices, and out
 metaTitle: "Disease Outbreak & Air Quality Monitoring | WorldMonitor"
 keywords: "disease outbreak map, epidemic monitoring dashboard, WHO outbreak tracker, air quality PM2.5 map, global health surveillance, health signals API"
 audience: "Public-health analysts, NGO and travel-security teams, researchers, journalists, expats and frequent travelers"
-heroImage: "/blog/og/disease-outbreak-air-quality-monitoring-health-signals.png"
+heroImage: "/blog/images/blog/disease-outbreak-air-quality-monitoring-health-signals.jpg"
 pubDate: "2026-07-21"
 ---
 

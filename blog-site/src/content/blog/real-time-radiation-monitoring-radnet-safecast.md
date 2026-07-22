@@ -4,7 +4,7 @@ description: "WorldMonitor merges EPA RadNet stations and the Safecast citizen-s
 metaTitle: "Real-Time Radiation Monitoring Map | WorldMonitor"
 keywords: "real time radiation map, radiation levels live, nuclear radiation monitoring, Safecast radiation data, EPA RadNet, radiation monitoring dashboard"
 audience: "OSINT analysts, journalists, researchers, emergency-preparedness planners, concerned readers during nuclear events"
-heroImage: "/blog/og/real-time-radiation-monitoring-radnet-safecast.png"
+heroImage: "/blog/images/blog/real-time-radiation-monitoring-radnet-safecast.jpg"
 pubDate: "2026-07-21"
 modifiedDate: "2026-07-22"
 ---

@@ -4,7 +4,7 @@ description: "happy.worldmonitor.app runs 27 curated positive feeds through Worl
 metaTitle: "Positive News Dashboard | World Monitor Happy"
 keywords: "positive news website, good news dashboard, uplifting news aggregator, human progress tracker, conservation wins, science breakthrough news"
 audience: "General readers, educators, parents, mental-health-conscious news consumers, optimists who want evidence"
-heroImage: "/blog/og/positive-news-dashboard-happy-worldmonitor.png"
+heroImage: "/blog/images/blog/positive-news-dashboard-happy-worldmonitor.jpg"
 pubDate: "2026-07-21"
 ---
 

@@ -4,7 +4,7 @@ description: "WorldMonitor scrapes real supermarket shelf prices — starting wi
 metaTitle: "Real-Time Shelf Price & Inflation Tracking | WorldMonitor"
 keywords: "real time inflation data, grocery price tracker, consumer prices API, shelf price monitoring, cost of living dashboard, food price index"
 audience: "Economists, macro analysts, journalists, expats, cost-of-living researchers"
-heroImage: "/blog/og/ground-truth-inflation-shelf-price-tracking-worldmonitor.png"
+heroImage: "/blog/images/blog/ground-truth-inflation-shelf-price-tracking-worldmonitor.jpg"
 pubDate: "2026-07-21"
 ---
 

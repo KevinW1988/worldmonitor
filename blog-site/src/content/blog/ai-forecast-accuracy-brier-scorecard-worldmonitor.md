@@ -4,7 +4,7 @@ description: "WorldMonitor grades its AI forecasts and prints the results: Brier
 metaTitle: "AI Forecast Accuracy & Brier Scorecard | WorldMonitor"
 keywords: "AI forecast accuracy, Brier score forecasting, geopolitical forecast track record, forecast calibration, prediction accountability, forecast verification"
 audience: "Forecasters, superforecasting community, quant researchers, skeptical analysts, AI evaluation researchers"
-heroImage: "/blog/og/ai-forecast-accuracy-brier-scorecard-worldmonitor.png"
+heroImage: "/blog/images/blog/ai-forecast-accuracy-brier-scorecard-worldmonitor.jpg"
 pubDate: "2026-07-21"
 modifiedDate: "2026-07-22"
 ---
