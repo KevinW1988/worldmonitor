@@ -26,7 +26,7 @@ Together they form a continuum: **edge sensor → local sensemaking → global i
 
 ---
 
-## Quick Start (this fork)
+## Quick Start (local)
 
 ```bash
 git clone https://github.com/KevinW1988/worldmonitor.git
@@ -37,7 +37,32 @@ npm run dev
 
 Open [localhost:3000](http://localhost:3000).
 
-No environment variables required for basic operation. See `.env.example` for optional API keys that unlock additional feeds.
+No environment variables required for basic operation. See `.env.example` for optional API keys.
+
+---
+
+## Deploy to Vercel (permanent public URL)
+
+**Full walkthrough:** **[docs/DEPLOY_VERCEL.md](docs/DEPLOY_VERCEL.md)**
+
+Short version:
+
+1. [vercel.com/new](https://vercel.com/new) → Import **KevinW1988/worldmonitor**
+2. Framework **Vite**, build `npm run build`, output `dist`, Node **20**
+3. Deploy (no env vars required for FWI)
+4. Use your `*.vercel.app` host in the links below
+
+**After deploy — FWI dashboard:**
+
+```
+https://YOUR_DEPLOY.vercel.app/dashboard?lat=39.7392&lon=-104.9903&zoom=8.0&view=colorado-fwi&timeRange=7d&layers=conflicts,hotspots,weather,outages,natural&fwi=1&silentSentinel=1
+```
+
+**Live FWI API:**
+
+```
+https://YOUR_DEPLOY.vercel.app/api/silent-sentinel/fwi
+```
 
 ---
 
@@ -62,25 +87,27 @@ Monitors **cascading** effects: wildfire → water systems → critical infrastr
 
 - Task: **[docs/TASK_TERTIARY_FIRE_WATER_INFRA.md](docs/TASK_TERTIARY_FIRE_WATER_INFRA.md)**
 - Map preset: **[data/silent-sentinel/colorado-fwi-map.json](data/silent-sentinel/colorado-fwi-map.json)**
+- Live pulls: NIFC WFIGS (CO fires) + NWS alerts (`/api/silent-sentinel/fwi`)
 
-**FWI map (open this):**
+**FWI map (local):**
 
 ```
-http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.0&view=colorado-fwi&timeRange=7d&layers=conflicts,hotspots,weather,outages,natural&silentSentinel=1
+http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.0&view=colorado-fwi&timeRange=7d&layers=conflicts,hotspots,weather,outages,natural&fwi=1&silentSentinel=1
 ```
 
 Layers: weather + outages + natural/hotspots for fire-water-power coupling. Bridge event type: `co.fwi.cascade`.
 
 ---
 
-## Edge ↔ Cloud Bridge (implemented)
+## Edge ↔ Cloud Bridge
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/api/silent-sentinel/events` | Ingest pipeline results |
 | `GET`  | `/api/silent-sentinel/events?limit=20` | List recent events |
+| `GET`  | `/api/silent-sentinel/fwi` | Live NIFC + NWS (Colorado FWI) |
 
-Enable UI: `?silentSentinel=1`
+Enable UI: `?silentSentinel=1` and/or `?fwi=1`
 
 ---
 
@@ -89,9 +116,10 @@ Enable UI: `?silentSentinel=1`
 1. ~~Edge ↔ Cloud bridge~~
 2. ~~Colorado / Denver metro + professional gov tracking~~
 3. ~~Tertiary FWI map task (fire / water / infra)~~
-4. Shared local AI (Ollama alignment)
-5. Deeper human-aligned map overlays
-6. CDTFW four-questions views
+4. ~~Live NIFC/NWS FWI panel + API~~
+5. Shared local AI (Ollama alignment)
+6. Deeper human-aligned map overlays
+7. CDTFW four-questions views
 
 ---
 
