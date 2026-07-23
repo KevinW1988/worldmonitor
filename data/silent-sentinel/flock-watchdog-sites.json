@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "flock-watchdog-sites",
+  "version": "1.0.0",
+  "title": "5 Key Flock Watchdog Sites",
+  "description": "Public civic-tech resources for ALPR / Flock Safety transparency. Reference links only — not operational surveillance. Colorado dashboard context: institutional awareness of fixed ALPR deployments and public contracts.",
+  "ethics": {
+    "scope": "public_transparency_tools",
+    "note": "These sites aggregate public records, FOIA/CORA templates, and crowdsourced camera maps. Do not use this panel to track individuals. Professional / institutional awareness only."
+  },
+  "sites": [
+    {
+      "id": "alpr-wtf",
+      "rank": 1,
+      "name": "Alpr.wtf",
+      "url": "https://alpr.wtf/",
+      "summary": "Directory of U.S. jurisdictions tied to Flock/ALPR networks, with ready-to-file public-records request templates.",
+      "focus": ["jurisdictions", "FOIA", "CORA", "records requests"]
+    },
+    {
+      "id": "eyes-on-flock",
+      "rank": 2,
+      "name": "EyesOnFlock.com",
+      "url": "https://eyesonflock.com/",
+      "summary": "Crowdsourced and transparency-portal data on Flock cameras, city contracts, and agency usage patterns.",
+      "focus": ["contracts", "camera counts", "agency transparency"]
+    },
+    {
+      "id": "deflock",
+      "rank": 3,
+      "name": "Deflock.me",
+      "url": "https://deflock.me/",
+      "alt_url": "https://www.deflock.org/",
+      "summary": "Nationwide open-source ALPR map tracking Flock and other LPR deployments, removals, and community resistance.",
+      "focus": ["map", "deployments", "removals", "OpenStreetMap"],
+      "note": "Also published at deflock.org; map counts change frequently."
+    },
+    {
+      "id": "have-i-been-flocked",
+      "rank": 4,
+      "name": "HaveIBeenFlocked.com",
+      "url": "https://haveibeenflocked.com/",
+      "summary": "Search public Flock audit logs and agency reports to see whether a plate appears in disclosed lookup records.",
+      "focus": ["audit logs", "plate lookup", "agency misuse reports"]
+    },
+    {
+      "id": "dont-get-flocked",
+      "rank": 5,
+      "name": "DontGetFlocked.com",
+      "url": "https://dontgetflocked.com/",
+      "summary": "Route planner that counts ALPR/Flock cameras along a path and suggests lower-surveillance alternatives (FlockHopper).",
+      "focus": ["routing", "camera counts", "avoidance"]
+    }
+  ],
+  "colorado_note": "For Colorado, prefer CORA requests via Alpr.wtf agency templates and confirm local contracts via city/county meeting minutes and EyesOnFlock. Denver metro remains P0 for institutional awareness only."
+}

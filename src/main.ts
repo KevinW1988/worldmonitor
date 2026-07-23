@@ -254,7 +254,7 @@ if (urlParams.get('settings') === '1') {
     })
     .catch(console.error);
 
-  // Silent Sentinel Edge + Colorado FWI panels (optional)
+  // Silent Sentinel Edge + Colorado FWI + Flock Watchdog panels (optional)
   const ssEnabled =
     urlParams.get('silentSentinel') === '1' ||
     urlParams.get('ss') === '1' ||
@@ -275,12 +275,23 @@ if (urlParams.get('settings') === '1') {
         return false;
       }
     })();
+  const flockEnabled =
+    urlParams.get('flock') === '1' ||
+    urlParams.get('flockWatchdog') === '1' ||
+    (() => {
+      try {
+        return localStorage.getItem('wm:flock') === '1';
+      } catch {
+        return false;
+      }
+    })();
 
-  if (ssEnabled || fwiEnabled) {
+  if (ssEnabled || fwiEnabled || flockEnabled) {
     void import('./bootstrap/silent-sentinel')
       .then((m) => {
         if (ssEnabled) m.bootSilentSentinel();
         if (fwiEnabled || ssEnabled) m.bootFwi();
+        if (flockEnabled || ssEnabled) m.bootFlockWatchdog();
       })
       .catch(console.warn);
   }
