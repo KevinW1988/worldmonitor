@@ -51,6 +51,29 @@ npm run dev:energy
 
 ---
 
+## Colorado focus (Denver metro P0)
+
+Geographic preset for **Colorado**, with the **Denver–Aurora–Lakewood metropolitan area** as highest focus, plus **professional/public government activity only** (no personal tracking).
+
+- Guide: **[docs/SILENT_SENTINEL_COLORADO.md](docs/SILENT_SENTINEL_COLORADO.md)**
+- Config: **[data/silent-sentinel/colorado-focus.json](data/silent-sentinel/colorado-focus.json)**
+
+**Local Colorado dashboard:**
+
+```
+http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.5&view=colorado&timeRange=7d&layers=conflicts,hotspots,sanctions,weather,outages,natural&silentSentinel=1
+```
+
+**Denver metro (higher zoom):**
+
+```
+http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=10.5&view=denver-metro&timeRange=7d&layers=conflicts,hotspots,weather,outages,natural&silentSentinel=1
+```
+
+Officials are tracked only via **public titles, calendars, open meetings, legislation, filings, and CORA-accessible records** — never private life.
+
+---
+
 ## Edge ↔ Cloud Bridge (implemented)
 
 Lightweight ingestion of Silent Sentinel pipeline outputs into World Monitor.
@@ -66,103 +89,20 @@ Lightweight ingestion of Silent Sentinel pipeline outputs into World Monitor.
 
 **Storage:** Upstash Redis list when `UPSTASH_REDIS_REST_URL` / `TOKEN` are configured; otherwise an in-memory ring buffer (max 50 events) for local `npm run dev`.
 
-**Payload:** the full dict returned by `SilentSentinelPipeline.process_event()`:
-
-```json
-{
-  "event": {
-    "type": "passive_rf",
-    "description": "Anomalous low-power L-band emission…",
-    "features": { "confidence": 0.78 },
-    "timestamp": 1710000000,
-    "source": "silent_sentinel_edge"
-  },
-  "four_questions": "…markdown…",
-  "levels": "…",
-  "convergence": "…",
-  "alignment": {
-    "human_in_loop_required": true,
-    "escalation_flags": ["…"],
-    "authority_gaps": [],
-    "ethical_notes": [],
-    "recommended_action": "Present to human operator for decision"
-  }
-}
-```
-
 ### UI panel
 
-A floating **Silent Sentinel Edge** panel shows the latest alerts (escalation flags, recommended action, human-in-the-loop badge).
-
-Enable it either way:
-
-1. Query string: open `http://localhost:3000/?silentSentinel=1` (or `?ss=1`)
-2. Persist: `localStorage.setItem('wm:silentSentinel', '1')` then reload
-
-Or call from code / console:
-
-```ts
-import { bootSilentSentinel } from './bootstrap/silent-sentinel';
-bootSilentSentinel();
-```
-
-Client service lives in `src/services/silent-sentinel-bridge.ts`.
-
-### End-to-end local test
-
-**Terminal 1 — World Monitor**
-
-```bash
-cd worldmonitor
-npm run dev
-# open http://localhost:3000/?silentSentinel=1
-```
-
-**Terminal 2 — Edge pipeline**
-
-```bash
-cd silent-sentinel-edge
-# bridge.enabled: true and url: http://localhost:3000 already in config/settings.yaml
-python -m src.main --demo
-```
-
-Each processed event is POSTed to the bridge; the panel updates within a few seconds.
-
-Manual smoke test:
-
-```bash
-curl -s -X POST http://localhost:3000/api/silent-sentinel/events \
-  -H 'Content-Type: application/json' \
-  -d '{"event":{"type":"test","description":"Bridge smoke test","features":{"confidence":0.9}},"alignment":{"human_in_loop_required":true,"escalation_flags":[],"recommended_action":"Acknowledge"}}'
-
-curl -s http://localhost:3000/api/silent-sentinel/events | jq .
-```
-
----
-
-## Original Project Features (inherited)
-
-- **500+ curated news feeds** across 15 categories, AI-synthesized into briefs
-- **Dual map engine** — 3D globe (globe.gl) and WebGL flat map (deck.gl) with 56 map layer types
-- **Cross-stream correlation** — military, economic, disaster, and escalation signal convergence
-- **Country Instability Index (CII)** — server-authoritative CII v8 stress scoring for 31 Tier-1 countries
-- **Finance radar** — 29 stock exchanges, commodities, crypto, and 7-signal market composite
-- **Local AI** — run everything with Ollama, no API keys required
-- **6 site variants** from a single codebase (world, tech, finance, commodity, happy, energy)
-- **Native desktop app** (Tauri 2) for macOS, Windows, and Linux
-- **25 languages** with native-language feeds and RTL support
-
-Full documentation, architecture and data sources remain those of the upstream project: [worldmonitor.app/docs](https://www.worldmonitor.app/docs/documentation).
+Enable with `?silentSentinel=1` or `localStorage.setItem('wm:silentSentinel', '1')`.
 
 ---
 
 ## Remaining Silent Sentinel Integration Directions
 
-1. ~~**Edge ↔ Cloud bridge**~~ — **done** (this commit)
-2. **Shared local AI** — align Ollama model choices and prompting style with the edge_llm.py recommendations (qwen2.5:3b, llama3.2:3b, etc.).
-3. **Human-aligned overlays** — surface governance / ROE / override indicators more deeply inside existing map layers and briefs.
-4. **Passive RF / CAM-Pulse context** — optional map markers driven by edge events that carry geolocation.
-5. **CDTFW lens** — optional analysis views that apply the four questions + levels + convergence framing to global events.
+1. ~~**Edge ↔ Cloud bridge**~~ — **done**
+2. ~~**Colorado / Denver metro focus + professional gov tracking**~~ — **docs + config**
+3. **Shared local AI** — align Ollama with edge model choices
+4. **Human-aligned overlays** — deeper map/brief integration
+5. **Passive RF / geo markers** — when edge events carry location
+6. **CDTFW lens** — four-questions views on global + Colorado events
 
 ---
 
