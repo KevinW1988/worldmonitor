@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "name": "silent-sentinel-colorado-focus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Colorado focus for Silent Sentinel × World Monitor. Highest priority: Denver metro. Professional/public government activity only.",
   "ethics": {
     "scope": "professional_public_only",
@@ -81,9 +81,10 @@
         "view": "colorado",
         "timeRange": "7d",
         "layers": "conflicts,hotspots,sanctions,weather,outages,natural",
-        "silentSentinel": "1"
+        "silentSentinel": "1",
+        "flock": "1"
       },
-      "local_url": "http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.5&view=colorado&timeRange=7d&layers=conflicts%2Chotspots%2Csanctions%2Cweather%2Coutages%2Cnatural&silentSentinel=1"
+      "local_url": "http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.5&view=colorado&timeRange=7d&layers=conflicts%2Chotspots%2Csanctions%2Cweather%2Coutages%2Cnatural&silentSentinel=1&flock=1"
     },
     "denver-metro": {
       "path": "/dashboard",
@@ -94,9 +95,10 @@
         "view": "denver-metro",
         "timeRange": "7d",
         "layers": "conflicts,hotspots,weather,outages,natural",
-        "silentSentinel": "1"
+        "silentSentinel": "1",
+        "flock": "1"
       },
-      "local_url": "http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=10.5&view=denver-metro&timeRange=7d&layers=conflicts%2Chotspots%2Cweather%2Coutages%2Cnatural&silentSentinel=1"
+      "local_url": "http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=10.5&view=denver-metro&timeRange=7d&layers=conflicts%2Chotspots%2Cweather%2Coutages%2Cnatural&silentSentinel=1&flock=1"
     }
   },
   "baseline_layers": [
@@ -193,6 +195,32 @@
     {
       "name": "RTD Open Records",
       "url": "https://www.rtd-denver.com/open-records"
+    },
+    {
+      "name": "Alpr.wtf — ALPR jurisdictions + records requests",
+      "url": "https://alpr.wtf/",
+      "group": "flock_watchdog"
+    },
+    {
+      "name": "EyesOnFlock.com — cameras + city contracts",
+      "url": "https://eyesonflock.com/",
+      "group": "flock_watchdog"
+    },
+    {
+      "name": "Deflock.me — nationwide ALPR map",
+      "url": "https://deflock.me/",
+      "group": "flock_watchdog"
+    },
+    {
+      "name": "HaveIBeenFlocked.com — public audit log check",
+      "url": "https://haveibeenflocked.com/",
+      "group": "flock_watchdog"
+    },
+    {
+      "name": "DontGetFlocked.com — route camera counts",
+      "url": "https://dontgetflocked.com/",
+      "group": "flock_watchdog"
     }
-  ]
+  ],
+  "flock_watchdog_table": "data/silent-sentinel/flock-watchdog-sites.json"
 }
