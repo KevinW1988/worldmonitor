@@ -1,0 +1,83 @@
+{
+  "name": "colorado-fwi-map",
+  "version": "0.1.0",
+  "task": "tertiary_fire_water_infrastructure",
+  "description": "3rd-order monitoring: wildfire coupled to water systems and critical infrastructure. Colorado / Denver metro P0.",
+  "ethics": {
+    "scope": "public_hazard_and_utility_only",
+    "human_in_loop_required": true
+  },
+  "orders": {
+    "1": ["active_fire", "smoke", "immediate_outage"],
+    "2": ["pump_pressure", "road_closure", "boil_water"],
+    "3": ["post_fire_debris_flood", "distribution_contamination_recovery", "mutual_aid_saturation", "policy_cascade"]
+  },
+  "geography": {
+    "center": { "lat": 39.7392, "lon": -104.9903 },
+    "default_zoom": 8.0,
+    "view": "colorado-fwi",
+    "priority": [
+      {
+        "id": "denver-metro-wui",
+        "level": "P0",
+        "bbox": { "west": -105.35, "south": 39.4, "east": -104.55, "north": 40.15 }
+      },
+      {
+        "id": "front-range",
+        "level": "P1",
+        "bbox": { "west": -106.0, "south": 38.7, "east": -104.4, "north": 40.5 }
+      },
+      {
+        "id": "colorado",
+        "level": "P2",
+        "center": { "lat": 39.0, "lon": -105.5 },
+        "zoom": 6.5
+      }
+    ]
+  },
+  "dashboard_preset": {
+    "local_url": "http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.0&view=colorado-fwi&timeRange=7d&layers=conflicts,hotspots,weather,outages,natural&silentSentinel=1",
+    "query": {
+      "lat": "39.7392",
+      "lon": "-104.9903",
+      "zoom": "8.0",
+      "view": "colorado-fwi",
+      "timeRange": "7d",
+      "layers": "conflicts,hotspots,weather,outages,natural",
+      "silentSentinel": "1"
+    }
+  },
+  "baseline_layers": ["conflicts", "hotspots", "weather", "outages", "natural"],
+  "domains": {
+    "fire": {
+      "signals": ["incident_perimeter", "red_flag", "smoke_aqi", "wui_exposure"],
+      "public_source_classes": ["NIFC", "InciWeb", "NWS", "AirNow", "CDPHE", "county_OEM"]
+    },
+    "water": {
+      "signals": ["boil_notice", "storage_stress", "treatment_power_dependency", "post_fire_quality", "debris_basin_risk"],
+      "public_source_classes": ["utility_notices", "CDPHE", "USBR", "county_public_works"]
+    },
+    "infrastructure": {
+      "signals": ["electric_outage", "corridor_closure", "critical_facility_status_public", "mutual_aid", "legislative_response"],
+      "public_source_classes": ["utility_outage_maps", "CDOT", "HIFLD_public", "leg.colorado.gov"]
+    }
+  },
+  "signal_types": [
+    "co.infra.alert",
+    "co.gov.action",
+    "co.fwi.cascade"
+  ],
+  "reference_events": [
+    {
+      "name": "Marshall Fire",
+      "year": 2021,
+      "note": "Colorado costliest fire; power loss, depressurization, water-quality recovery lessons"
+    }
+  ],
+  "external_pointers": [
+    {
+      "label": "Mapping the Rabbit Hole (user-supplied research link)",
+      "url": "https://mappingtherabbithole.com/"
+    }
+  ]
+}
