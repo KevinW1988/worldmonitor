@@ -77,6 +77,7 @@ function ensureStyles() {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
       padding: 10px 12px;
       border-bottom: 1px solid rgba(90, 140, 200, 0.25);
       position: sticky;
@@ -88,14 +89,28 @@ function ensureStyles() {
       font-size: 13px;
       font-weight: 600;
       letter-spacing: 0.02em;
+      flex: 1;
+    }
+    #${PANEL_ID} .ss-header .ss-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
     }
     #${PANEL_ID} .ss-header button {
+      background: rgba(74, 144, 217, 0.2);
+      border: 1px solid rgba(74, 144, 217, 0.35);
+      color: #cde;
+      cursor: pointer;
+      font-size: 11px;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+    #${PANEL_ID} .ss-header button.ss-icon {
       background: transparent;
       border: none;
-      color: #9ab;
-      cursor: pointer;
       font-size: 16px;
-      line-height: 1;
+      padding: 0 4px;
     }
     #${PANEL_ID} .ss-body {
       padding: 8px 10px 12px;
@@ -107,6 +122,11 @@ function ensureStyles() {
       opacity: 0.65;
       padding: 12px 4px;
       text-align: center;
+    }
+    #${PANEL_ID} .ss-mode {
+      font-size: 10px;
+      opacity: 0.55;
+      padding: 0 10px 6px;
     }
     #${PANEL_ID} .ss-card {
       border-radius: 8px;
@@ -144,7 +164,8 @@ function ensureStyles() {
       border-radius: 4px;
       background: rgba(74, 144, 217, 0.25);
     }
-    #${PANEL_ID}.ss-collapsed .ss-body { display: none; }
+    #${PANEL_ID}.ss-collapsed .ss-body,
+    #${PANEL_ID}.ss-collapsed .ss-mode { display: none; }
   `;
   document.head.appendChild(style);
 }
@@ -159,25 +180,41 @@ export const SilentSentinelPanel = {
       root.innerHTML = `
         <div class="ss-header">
           <h2>Silent Sentinel Edge</h2>
-          <button type="button" title="Collapse" aria-label="Collapse">−</button>
+          <div class="ss-actions">
+            <button type="button" class="ss-demo" title="Inject demo events">Demo</button>
+            <button type="button" class="ss-icon" title="Collapse" aria-label="Collapse">−</button>
+          </div>
         </div>
+        <div class="ss-mode"></div>
         <div class="ss-body"><div class="ss-empty">Waiting for edge events…</div></div>
       `;
       parent.appendChild(root);
 
-      const btn = root.querySelector('button');
-      btn?.addEventListener('click', () => {
+      const collapseBtn = root.querySelector('button.ss-icon');
+      collapseBtn?.addEventListener('click', () => {
         root!.classList.toggle('ss-collapsed');
-        btn.textContent = root!.classList.contains('ss-collapsed') ? '+' : '−';
+        if (collapseBtn) {
+          collapseBtn.textContent = root!.classList.contains('ss-collapsed') ? '+' : '−';
+        }
+      });
+
+      const demoBtn = root.querySelector('button.ss-demo');
+      demoBtn?.addEventListener('click', () => {
+        void silentSentinelBridge.injectDemoEvents();
       });
     }
 
     const body = root.querySelector('.ss-body') as HTMLElement;
+    const modeEl = root.querySelector('.ss-mode') as HTMLElement;
 
     silentSentinelBridge.start();
     const unsub = silentSentinelBridge.subscribe((events) => {
+      modeEl.textContent =
+        silentSentinelBridge.getMode() === 'api'
+          ? 'Source: API bridge'
+          : 'Source: local (Vite / offline fallback)';
       if (!events.length) {
-        body.innerHTML = `<div class="ss-empty">No edge events yet. Run the Jetson pipeline or POST to /api/silent-sentinel/events</div>`;
+        body.innerHTML = `<div class="ss-empty">No edge events yet. Click <strong>Demo</strong> or POST from the Jetson pipeline.</div>`;
         return;
       }
       body.innerHTML = events.slice(0, 12).map(renderEvent).join('');
