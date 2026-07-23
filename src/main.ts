@@ -12,21 +12,9 @@ import { App } from './App';
 import { installUtmInterceptor } from './utils/utm';
 
 if (SITE_VARIANT === 'happy') {
-  // Keeps happy-theme.css off other variants' eager CSS graph. On happy, the
-  // stylesheet applies asynchronously, so a brief base-theme flash is possible.
   void import('./styles/happy-theme.css');
 }
 
-// Activate the deferred dashboard app stylesheet. The build
-// (deferDashboardStylesheetLinks in vite.config.ts) emits the large dashboard
-// CSS as <link media="print" data-wm-deferred-style="dashboard"> + a <noscript>
-// blocking copy, so it does not block first paint; flipping media to "all" here
-// applies it once main.js runs. The selector below MUST stay in lockstep with
-// the attribute/value the build writes (data-wm-deferred-style="dashboard" +
-// media="print"). No-JS users get the <noscript> fallback; if main.js fails to
-// execute (e.g. an /assets 404 after a redeploy) the wm-sw-nuke handler in
-// index.html reloads. Kept as the first body statement so it runs before the
-// rest of startup.
 function activateDeferredDashboardStyles(): void {
   document
     .querySelectorAll<HTMLLinkElement>('link[data-wm-deferred-style="dashboard"][media="print"]')
@@ -38,7 +26,6 @@ function activateDeferredDashboardStyles(): void {
 activateDeferredDashboardStyles();
 installLcpAttributionDebug();
 
-// perf G — defer @sentry/browser off the critical path (#3994).
 installPreInitErrorQueue();
 scheduleSentryInit();
 
@@ -46,13 +33,10 @@ registerInpReporting();
 registerClsReporting();
 registerLcpReporting();
 
-// Suppress NotAllowedError from YouTube IFrame API's internal play() — browser autoplay policy,
-// not actionable. The YT IFrame API doesn't expose the play() promise so it leaks as unhandled.
 window.addEventListener('unhandledrejection', (e) => {
   if (e.reason?.name === 'NotAllowedError') e.preventDefault();
 });
 
-// CSP violation filter — kept intact from upstream (large, security-sensitive).
 function shouldSuppressCspViolation(
   disposition: string,
   directive: string,
@@ -66,17 +50,17 @@ function shouldSuppressCspViolation(
   if (directive === 'connect-src' && cspConnectSrcAllowsHttps) {
     try {
       if (new URL(blockedURI).protocol === 'https:') return true;
-    } catch { /* scheme-only values like "blob" fall through */ }
+    } catch { /* */ }
   }
   if (directive === 'media-src' && cspMediaSrcAllowsHttps) {
     try {
       if (new URL(blockedURI).protocol === 'https:') return true;
-    } catch { /* scheme-only values fall through */ }
+    } catch { /* */ }
   }
   if (directive === 'media-src') {
     try {
       if (new URL(blockedURI).hostname === 'tts.baidu.com') return true;
-    } catch { /* scheme-only values fall through */ }
+    } catch { /* */ }
   }
   if (directive === 'default-src') {
     try {
@@ -84,19 +68,19 @@ function shouldSuppressCspViolation(
       if (u.protocol === 'http:'
           && u.hostname !== 'worldmonitor.app'
           && !u.hostname.endsWith('.worldmonitor.app')) return true;
-    } catch { /* scheme-only values fall through */ }
+    } catch { /* */ }
   }
   if (directive === 'connect-src' && firstPartyConvexHost) {
     try {
       if (new URL(blockedURI).hostname === firstPartyConvexHost) return true;
-    } catch { /* scheme-only values fall through */ }
+    } catch { /* */ }
   }
   if (directive === 'img-src') {
     try {
       const url = new URL(blockedURI);
       if (url.protocol === 'https:'
           && (url.hostname === 'worldmonitor.app' || url.hostname.endsWith('.worldmonitor.app'))) return true;
-    } catch { /* scheme-only values fall through */ }
+    } catch { /* */ }
   }
   if (
     (directive === 'script-src-elem' || directive === 'script-src')
@@ -111,7 +95,7 @@ function shouldSuppressCspViolation(
       if (frameHost === 'trendmicro.com' || frameHost.endsWith('.trendmicro.com')) return true;
       if (frameHost.endsWith('.clients6.google.com')) return true;
       if (frameHost === 'h5player.anzz.site') return true;
-    } catch { /* scheme-only values fall through */ }
+    } catch { /* */ }
   }
   if (/^(?:chrome|moz|safari(?:-web)?|ms-browser)-extension/.test(sourceFile) || /^(?:chrome|moz|safari(?:-web)?|ms-browser)-extension/.test(blockedURI)) return true;
   if (blockedURI === 'blob' || /^blob:/.test(sourceFile) || /^blob:/.test(blockedURI)) return true;
@@ -126,7 +110,7 @@ function shouldSuppressCspViolation(
       if (url.protocol === 'https:' && url.hostname === 'fonts.gstatic.com' && /^\/s\/.+\.woff2$/.test(url.pathname)) return true;
       if (url.protocol === 'https:' && url.hostname === 'frontend-cdn.perplexity.ai' && /\.woff2?$/.test(url.pathname)) return true;
       if (url.protocol === 'https:' && url.hostname === 'lf-flow-web-cdn.doubao.com' && /\.(?:woff2?|ttf)$/.test(url.pathname)) return true;
-    } catch { /* scheme-only values fall through */ }
+    } catch { /* */ }
   }
   if (/googlevideo\.com|youtube\.com\/generate_204/.test(blockedURI)) return true;
   if (/securly\.com|goguardian\.com|contentkeeper\.com/.test(blockedURI)) return true;
@@ -137,7 +121,7 @@ function shouldSuppressCspViolation(
       const url = new URL(blockedURI);
       if (url.protocol === 'https:' && url.hostname === 'fonts.googleapis.com' && /^\/css2?$/.test(url.pathname)) return true;
       if (url.protocol === 'https:' && url.hostname === 'www.6ppn.com' && /\.css$/.test(url.pathname)) return true;
-    } catch { /* unparseable values fall through */ }
+    } catch { /* */ }
     if (blockedURI === 'https://[email]') return true;
   }
   if (blockedURI === 'inline' && directive === 'script-src-elem') return true;
@@ -270,7 +254,7 @@ if (urlParams.get('settings') === '1') {
     })
     .catch(console.error);
 
-  // Silent Sentinel Edge panel (optional)
+  // Silent Sentinel Edge + Colorado FWI panels (optional)
   const ssEnabled =
     urlParams.get('silentSentinel') === '1' ||
     urlParams.get('ss') === '1' ||
@@ -281,8 +265,24 @@ if (urlParams.get('settings') === '1') {
         return false;
       }
     })();
-  if (ssEnabled) {
-    void import('./bootstrap/silent-sentinel').then((m) => m.bootSilentSentinel()).catch(console.warn);
+  const fwiEnabled =
+    urlParams.get('fwi') === '1' ||
+    urlParams.get('view') === 'colorado-fwi' ||
+    (() => {
+      try {
+        return localStorage.getItem('wm:fwi') === '1';
+      } catch {
+        return false;
+      }
+    })();
+
+  if (ssEnabled || fwiEnabled) {
+    void import('./bootstrap/silent-sentinel')
+      .then((m) => {
+        if (ssEnabled) m.bootSilentSentinel();
+        if (fwiEnabled || ssEnabled) m.bootFwi();
+      })
+      .catch(console.warn);
   }
 }
 
