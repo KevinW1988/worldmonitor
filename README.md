@@ -39,21 +39,9 @@ Open [localhost:3000](http://localhost:3000).
 
 No environment variables required for basic operation. See `.env.example` for optional API keys that unlock additional feeds.
 
-Variant-specific development:
-
-```bash
-npm run dev:tech
-npm run dev:finance
-npm run dev:commodity
-npm run dev:happy
-npm run dev:energy
-```
-
 ---
 
 ## Colorado focus (Denver metro P0)
-
-Geographic preset for **Colorado**, with the **Denver–Aurora–Lakewood metropolitan area** as highest focus, plus **professional/public government activity only** (no personal tracking).
 
 - Guide: **[docs/SILENT_SENTINEL_COLORADO.md](docs/SILENT_SENTINEL_COLORADO.md)**
 - Config: **[data/silent-sentinel/colorado-focus.json](data/silent-sentinel/colorado-focus.json)**
@@ -64,45 +52,54 @@ Geographic preset for **Colorado**, with the **Denver–Aurora–Lakewood metrop
 http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.5&view=colorado&timeRange=7d&layers=conflicts,hotspots,sanctions,weather,outages,natural&silentSentinel=1
 ```
 
-**Denver metro (higher zoom):**
+Officials: **professional/public activity only** (no personal tracking).
+
+---
+
+## ACTIVE — Tertiary (3rd-order) task: Fire × Water × Infrastructure
+
+Monitors **cascading** effects: wildfire → water systems → critical infrastructure (and delayed post-fire flood/contamination/policy effects).
+
+- Task: **[docs/TASK_TERTIARY_FIRE_WATER_INFRA.md](docs/TASK_TERTIARY_FIRE_WATER_INFRA.md)**
+- Map preset: **[data/silent-sentinel/colorado-fwi-map.json](data/silent-sentinel/colorado-fwi-map.json)**
+
+**FWI map (open this):**
 
 ```
-http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=10.5&view=denver-metro&timeRange=7d&layers=conflicts,hotspots,weather,outages,natural&silentSentinel=1
+http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.0&view=colorado-fwi&timeRange=7d&layers=conflicts,hotspots,weather,outages,natural&silentSentinel=1
 ```
 
-Officials are tracked only via **public titles, calendars, open meetings, legislation, filings, and CORA-accessible records** — never private life.
+Layers: weather + outages + natural/hotspots for fire-water-power coupling. Bridge event type: `co.fwi.cascade`.
 
 ---
 
 ## Edge ↔ Cloud Bridge (implemented)
 
-Lightweight ingestion of Silent Sentinel pipeline outputs into World Monitor.
-
-### API
-
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/api/silent-sentinel/events` | Ingest one pipeline result (or an array) |
-| `GET`  | `/api/silent-sentinel/events?limit=20` | List recent events (newest first) |
+| `POST` | `/api/silent-sentinel/events` | Ingest pipeline results |
+| `GET`  | `/api/silent-sentinel/events?limit=20` | List recent events |
 
-**Auth (optional):** set env `SILENT_SENTINEL_INGEST_KEY`. When set, POST requires header `X-Silent-Sentinel-Key`. When unset, the endpoint is open (convenient for local dev).
-
-**Storage:** Upstash Redis list when `UPSTASH_REDIS_REST_URL` / `TOKEN` are configured; otherwise an in-memory ring buffer (max 50 events) for local `npm run dev`.
-
-### UI panel
-
-Enable with `?silentSentinel=1` or `localStorage.setItem('wm:silentSentinel', '1')`.
+Enable UI: `?silentSentinel=1`
 
 ---
 
-## Remaining Silent Sentinel Integration Directions
+## Integration status
 
-1. ~~**Edge ↔ Cloud bridge**~~ — **done**
-2. ~~**Colorado / Denver metro focus + professional gov tracking**~~ — **docs + config**
-3. **Shared local AI** — align Ollama with edge model choices
-4. **Human-aligned overlays** — deeper map/brief integration
-5. **Passive RF / geo markers** — when edge events carry location
-6. **CDTFW lens** — four-questions views on global + Colorado events
+1. ~~Edge ↔ Cloud bridge~~
+2. ~~Colorado / Denver metro + professional gov tracking~~
+3. ~~Tertiary FWI map task (fire / water / infra)~~
+4. Shared local AI (Ollama alignment)
+5. Deeper human-aligned map overlays
+6. CDTFW four-questions views
+
+---
+
+## Related Repositories
+
+- [Silent Sentinel Edge AI](https://github.com/KevinW1988/silent-sentinel-edge)
+- [Colorado Legislative Tracker](https://github.com/KevinW1988/colorado-legislative-tracker)
+- [Upstream World Monitor](https://github.com/koala73/worldmonitor)
 
 ---
 
@@ -110,17 +107,6 @@ Enable with `?silentSentinel=1` or `localStorage.setItem('wm:silentSentinel', '1
 
 **AGPL-3.0-only** (same as upstream). See [LICENSE](LICENSE).
 
-This is a research / prototype fork. Always keep a human in the decision loop.
+Research / prototype. Always keep a human in the decision loop.
 
-Upstream copyright (C) 2024-2026 Elie Habib / koala73. All rights reserved under the AGPL terms.
-
----
-
-## Related Repositories
-
-- [Silent Sentinel Edge AI](https://github.com/KevinW1988/silent-sentinel-edge) — Edge strategic sensemaking core for NVIDIA Jetson Orin Nano
-- [Upstream World Monitor](https://github.com/koala73/worldmonitor) — Original project
-
----
-
-*Fork maintained by [KevinW1988](https://github.com/KevinW1988) for Silent Sentinel exploration.*
+*Fork maintained by [KevinW1988](https://github.com/KevinW1988).*
