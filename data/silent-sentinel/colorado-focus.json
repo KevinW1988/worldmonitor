@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "silent-sentinel-colorado-focus",
+  "version": "0.1.0",
+  "description": "Colorado focus for Silent Sentinel × World Monitor. Highest priority: Denver metro. Professional/public government activity only.",
+  "ethics": {
+    "scope": "professional_public_only",
+    "forbidden": [
+      "personal_addresses",
+      "family",
+      "health",
+      "private_social",
+      "non_public_location",
+      "surveillance_of_private_life"
+    ],
+    "allowed": [
+      "official_title_office",
+      "public_calendars",
+      "open_meetings",
+      "voting_and_legislation",
+      "official_press",
+      "published_official_travel",
+      "campaign_finance_filings",
+      "contracts_and_budgets",
+      "cora_public_records"
+    ],
+    "human_in_loop_required": true
+  },
+  "geography": {
+    "state": "Colorado",
+    "state_fips": "08",
+    "priority": [
+      {
+        "id": "denver-metro",
+        "label": "Denver–Aurora–Lakewood MSA",
+        "level": "P0",
+        "center": { "lat": 39.7392, "lon": -104.9903 },
+        "zoom": 10.5,
+        "bbox": {
+          "west": -105.25,
+          "south": 39.45,
+          "east": -104.55,
+          "north": 40.05
+        }
+      },
+      {
+        "id": "front-range",
+        "label": "Front Range corridor",
+        "level": "P1",
+        "center": { "lat": 39.5, "lon": -104.9 },
+        "zoom": 8.0,
+        "bbox": {
+          "west": -105.6,
+          "south": 38.7,
+          "east": -104.4,
+          "north": 40.3
+        }
+      },
+      {
+        "id": "colorado",
+        "label": "Statewide Colorado",
+        "level": "P2",
+        "center": { "lat": 39.0, "lon": -105.5 },
+        "zoom": 6.5,
+        "bbox": {
+          "west": -109.06,
+          "south": 36.99,
+          "east": -102.04,
+          "north": 41.0
+        }
+      }
+    ]
+  },
+  "dashboard_presets": {
+    "colorado": {
+      "path": "/dashboard",
+      "query": {
+        "lat": "39.7392",
+        "lon": "-104.9903",
+        "zoom": "8.5",
+        "view": "colorado",
+        "timeRange": "7d",
+        "layers": "conflicts,hotspots,sanctions,weather,outages,natural",
+        "silentSentinel": "1"
+      },
+      "local_url": "http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=8.5&view=colorado&timeRange=7d&layers=conflicts%2Chotspots%2Csanctions%2Cweather%2Coutages%2Cnatural&silentSentinel=1"
+    },
+    "denver-metro": {
+      "path": "/dashboard",
+      "query": {
+        "lat": "39.7392",
+        "lon": "-104.9903",
+        "zoom": "10.5",
+        "view": "denver-metro",
+        "timeRange": "7d",
+        "layers": "conflicts,hotspots,weather,outages,natural",
+        "silentSentinel": "1"
+      },
+      "local_url": "http://localhost:3000/dashboard?lat=39.7392&lon=-104.9903&zoom=10.5&view=denver-metro&timeRange=7d&layers=conflicts%2Chotspots%2Cweather%2Coutages%2Cnatural&silentSentinel=1"
+    }
+  },
+  "baseline_layers": [
+    "conflicts",
+    "hotspots",
+    "sanctions",
+    "weather",
+    "outages",
+    "natural"
+  ],
+  "signal_types": [
+    {
+      "id": "co.gov.meeting",
+      "description": "Noticed open meeting (agenda/minutes URL required)"
+    },
+    {
+      "id": "co.gov.calendar",
+      "description": "Published official calendar item"
+    },
+    {
+      "id": "co.gov.travel",
+      "description": "Official travel release only (no personal travel)"
+    },
+    {
+      "id": "co.gov.filing",
+      "description": "Public disclosure, lobbying, or campaign finance filing"
+    },
+    {
+      "id": "co.gov.action",
+      "description": "Legislative action, executive order, ordinance"
+    },
+    {
+      "id": "co.infra.alert",
+      "description": "Public emergency or infrastructure notice"
+    }
+  ],
+  "official_roster_categories": [
+    {
+      "id": "co_executive",
+      "label": "Colorado statewide executive",
+      "priority": "P0",
+      "fields": ["title", "office", "agency", "public_bio_url", "public_contact_office"]
+    },
+    {
+      "id": "co_general_assembly_metro",
+      "label": "General Assembly (Denver metro districts)",
+      "priority": "P0",
+      "fields": ["title", "chamber", "district", "committees", "public_profile_url"]
+    },
+    {
+      "id": "denver_city",
+      "label": "Denver Mayor and City Council",
+      "priority": "P0",
+      "fields": ["title", "district_or_at_large", "public_profile_url", "published_calendar_url"]
+    },
+    {
+      "id": "regional_boards",
+      "label": "Major regional boards (e.g. RTD)",
+      "priority": "P1",
+      "fields": ["body", "seat", "public_meetings_url"]
+    },
+    {
+      "id": "federal_co_delegation",
+      "label": "Colorado federal congressional offices",
+      "priority": "P1",
+      "fields": ["title", "chamber", "district_or_seat", "official_site_url"]
+    }
+  ],
+  "source_bookmarks": [
+    {
+      "name": "Colorado General Assembly",
+      "url": "https://leg.colorado.gov"
+    },
+    {
+      "name": "City and County of Denver",
+      "url": "https://www.denvergov.org"
+    },
+    {
+      "name": "Transparent Denver",
+      "url": "https://www.denvergov.org/Government/Legislation-and-Transparency/Transparent-Denver"
+    },
+    {
+      "name": "Denver Open Data Catalog",
+      "url": "https://www.denvergov.org/opendata"
+    },
+    {
+      "name": "Denver CORA",
+      "url": "https://www.denvergov.org/Government/Agencies-Departments-Offices/Agencies-Departments-Offices-Directory/City-Attorneys-Office/Colorado-Open-Records-Act-CORA"
+    },
+    {
+      "name": "Colorado FOIC Open Government Guide",
+      "url": "https://coloradofoic.org/open-government-guide/"
+    },
+    {
+      "name": "RTD Open Records",
+      "url": "https://www.rtd-denver.com/open-records"
+    }
+  ]
+}
