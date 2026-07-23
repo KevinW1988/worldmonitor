@@ -1,12 +1,13 @@
 /**
- * Optional bootstrap entry for the Silent Sentinel panel.
- * Import this from main or call from the console / a variant entrypoint:
+ * Optional bootstrap for Silent Sentinel + Colorado FWI panels.
  *
- *   import { bootSilentSentinel } from './bootstrap/silent-sentinel';
- *   bootSilentSentinel();
+ *   ?silentSentinel=1  — edge bridge panel
+ *   ?fwi=1             — live NIFC/NWS FWI panel
+ *   both can be combined
  */
 
 import { SilentSentinelPanel } from '../components/SilentSentinelPanel';
+import { FwiPanel } from '../components/FwiPanel';
 import { silentSentinelBridge } from '../services/silent-sentinel-bridge';
 
 export function bootSilentSentinel(opts?: { baseUrl?: string; pollMs?: number }) {
@@ -14,19 +15,31 @@ export function bootSilentSentinel(opts?: { baseUrl?: string; pollMs?: number })
   return SilentSentinelPanel.mount(document.body);
 }
 
-// Auto-mount when ?silentSentinel=1 or localStorage flag is set
+export function bootFwi() {
+  return FwiPanel.mount(document.body);
+}
+
 if (typeof window !== 'undefined') {
   const params = new URLSearchParams(window.location.search);
-  const enabled =
+  const ss =
     params.get('silentSentinel') === '1' ||
     params.get('ss') === '1' ||
     window.localStorage.getItem('wm:silentSentinel') === '1';
-  if (enabled) {
-    // Defer until DOM ready
+  const fwi =
+    params.get('fwi') === '1' ||
+    params.get('view') === 'colorado-fwi' ||
+    window.localStorage.getItem('wm:fwi') === '1';
+
+  const start = () => {
+    if (ss) bootSilentSentinel();
+    if (fwi || ss) bootFwi();
+  };
+
+  if (ss || fwi) {
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', () => bootSilentSentinel());
+      document.addEventListener('DOMContentLoaded', start);
     } else {
-      bootSilentSentinel();
+      start();
     }
   }
 }
